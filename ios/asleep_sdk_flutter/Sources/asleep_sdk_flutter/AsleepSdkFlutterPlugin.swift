@@ -151,7 +151,8 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
   func checkAndRestoreTracking(
     completion: @escaping (Result<RestoreMessage, Error>) -> Void
   ) {
-    completion(.success(RestoreMessage(hasActiveSession: false)))
+    let hasActiveSession = trackingManager?.getTrackingStatus().sessionId != nil
+    completion(.success(RestoreMessage(hasActiveSession: hasActiveSession)))
   }
 
   func checkBatteryOptimization(
