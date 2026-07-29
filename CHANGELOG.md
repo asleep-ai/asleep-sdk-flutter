@@ -7,6 +7,7 @@
 - Add Pigeon-generated Kotlin and Swift transport contracts.
 - Add an example application, contract tests, architecture records, and
   compatibility documentation.
+- Add GitHub Actions validation and short-lived internal example artifacts.
 
 This version is a non-publishable local development draft. Native artifact
 access, package ownership, license, and final compatibility policy remain

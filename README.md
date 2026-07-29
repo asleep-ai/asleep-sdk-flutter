@@ -171,6 +171,17 @@ flutter test
 Native builds require access to the Asleep Android and iOS artifacts. See
 [compatibility notes](doc/COMPATIBILITY.md) for the exact unresolved boundary.
 
+## CI and delivery
+
+GitHub Actions runs Dart contracts, Android bridge tests and an example APK
+build, plus CocoaPods validation and an iOS simulator build. Pushes to `main`
+and manual runs retain the non-production example artifacts for seven days.
+
+This internal delivery path does not publish to pub.dev, create a GitHub
+release, produce a production/device-signed build, or embed an API key. Public
+publishing remains disabled until the compatibility and legal blockers are
+resolved.
+
 ## Documentation
 
 - [Implementation plan and success criteria](doc/IMPLEMENTATION_PLAN.md)
