@@ -22,7 +22,7 @@ Toolchain:
 | API baseline | `dart pub global run dart_apitool:main extract --input . --set-exit-on-missing-export --force-use-flutter` with 0.23.2 | Pass |
 | Dependency freshness | `flutter pub outdated` | Pass; direct and transitive packages use the newest versions resolvable by the current Flutter SDK |
 | Pub score | pana 0.23.15 against a disposable copy | 140/160; 91/254 API elements documented; expected license and iOS SPM deficits remain |
-| Package validation | `dart pub publish --dry-run` in a disposable copy | Pass, 0 warnings, 100 KB compressed archive; no package was published |
+| Package validation | `dart pub publish --dry-run` in a disposable copy | Pass, 0 warnings, 102 KB compressed archive; no package was published |
 | Archive inspection | Sensitive filename and credential-pattern scan of the disposable copy and dry-run list | Pass; no credential pattern and no sensitive file in the archive list |
 | Workflow lint | `actionlint .github/workflows/*.yml` | Pass |
 | Android bridge | `./gradlew :asleep_sdk_flutter:compileDebugKotlin :asleep_sdk_flutter:testDebugUnitTest` from `example/android` with Android Studio JBR and Android SDK | Pass, 3 transport and process-ownership tests |
