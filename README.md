@@ -21,6 +21,8 @@ audio-based sleep tracking.
 
 See [the contract matrix](doc/CONTRACT_MATRIX.md) for the source-level
 comparison and [compatibility notes](doc/COMPATIBILITY.md) before integrating.
+See [the distribution contract](doc/DISTRIBUTION.md) before creating a tag or
+removing `publish_to: none`.
 
 ## Developer journey
 
@@ -182,6 +184,11 @@ release, produce a production/device-signed build, or embed an API key. Public
 publishing remains disabled until the compatibility and legal blockers are
 resolved.
 
+Release-candidate tags run validation. The pub.dev OIDC and generated-notes
+GitHub Release jobs remain skipped unless maintainers explicitly set
+`PUBDEV_PUBLISH_ENABLED=true` or `RELEASE_CREATION_ENABLED=true`. Both variables
+must remain unset before their corresponding approvals.
+
 ## Documentation
 
 - [Implementation plan and success criteria](doc/IMPLEMENTATION_PLAN.md)
@@ -192,3 +199,4 @@ resolved.
 - [Compatibility and release blockers](doc/COMPATIBILITY.md)
 - [Verification record](doc/VERIFICATION.md)
 - [React Native migration map](doc/MIGRATION.md)
+- [Distribution and release contract](doc/DISTRIBUTION.md)

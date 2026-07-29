@@ -5,7 +5,12 @@ import 'asleep_models.dart';
 import 'asleep_platform.dart';
 import 'pigeon_asleep_platform.dart';
 
+/// Coordinates Asleep setup, tracking, reports, events, and observable state.
 class AsleepClient {
+  /// Creates a client backed by [platform] or the default native implementation.
+  ///
+  /// Supply an [AsleepPlatform] fake to test SDK-consuming code without native
+  /// platform channels.
   AsleepClient({AsleepPlatform? platform})
     : _platform = platform ?? PigeonAsleepPlatform();
 
@@ -21,10 +26,16 @@ class AsleepClient {
   bool _onDeviceAnalysisEnabled = false;
   bool _disposed = false;
 
+  /// The most recently reduced SDK state.
   AsleepSnapshot get state => _state;
+
+  /// Emits each state snapshot after it changes.
   Stream<AsleepSnapshot> get states => _states.stream;
+
+  /// Emits native SDK events without reducing or filtering them.
   Stream<AsleepEvent> get events => _events.stream;
 
+  /// Sets up the native SDK with the supplied API and service options.
   Future<void> initialize(AsleepSetupOptions options) async {
     _ensureOpen();
     _attachEvents();
@@ -46,6 +57,7 @@ class AsleepClient {
     }
   }
 
+  /// Applies credentials and endpoints without running the setup flow.
   Future<void> configure(AsleepConfiguration configuration) async {
     _ensureOpen();
     _attachEvents();
@@ -53,6 +65,7 @@ class AsleepClient {
     _initialized = true;
   }
 
+  /// Checks for a native tracking session that can be restored.
   Future<RestoreResult> checkAndRestoreTracking() async {
     _ensureReady();
     final result = await _platform.checkAndRestoreTracking();
@@ -67,6 +80,7 @@ class AsleepClient {
     return result;
   }
 
+  /// Returns the Android battery-optimization status.
   Future<BatteryOptimizationStatus> checkBatteryOptimization() async {
     _ensureReady();
     final status = await _platform.checkBatteryOptimization();
@@ -74,21 +88,25 @@ class AsleepClient {
     return status;
   }
 
+  /// Requests an Android battery-optimization exemption when supported.
   Future<bool> requestBatteryOptimizationExemption() {
     _ensureReady();
     return _platform.requestBatteryOptimizationExemption();
   }
 
+  /// Whether all platform permissions required for tracking are granted.
   Future<bool> hasRequiredPermissions() {
     _ensureOpen();
     return _platform.hasRequiredPermissions();
   }
 
+  /// Requests the platform permissions required for tracking.
   Future<bool> requestRequiredPermissions() {
     _ensureOpen();
     return _platform.requestRequiredPermissions();
   }
 
+  /// Starts a new tracking session with optional platform-specific settings.
   Future<void> startTracking([
     AsleepTrackingOptions options = const AsleepTrackingOptions(),
   ]) async {
@@ -108,6 +126,7 @@ class AsleepClient {
     await _platform.startTracking(options);
   }
 
+  /// Resumes a paused session or one awaiting foreground recovery.
   Future<void> resumeTracking() {
     _ensureReady();
     if (_state.trackingStatus != TrackingStatus.recoveryRequired &&
@@ -120,6 +139,7 @@ class AsleepClient {
     return _platform.resumeTracking();
   }
 
+  /// Stops the active tracking session.
   Future<void> stopTracking() async {
     _ensureReady();
     if (!_state.isTracking) {
@@ -131,6 +151,7 @@ class AsleepClient {
     await _platform.stopTracking();
   }
 
+  /// Requests an analysis update for the active session.
   Future<AnalysisRequest> requestAnalysis() async {
     _ensureReady();
     _setState(_state.copyWith(isAnalyzing: true));
@@ -142,31 +163,37 @@ class AsleepClient {
     }
   }
 
+  /// Fetches the detailed report for [sessionId].
   Future<AsleepReport> getReport(String sessionId) {
     _ensureReady();
     return _platform.getReport(sessionId);
   }
 
+  /// Fetches sessions whose report dates fall within the requested range.
   Future<List<AsleepSession>> getReportList(String fromDate, String toDate) {
     _ensureReady();
     return _platform.getReportList(fromDate, toDate);
   }
 
+  /// Fetches an aggregate report for the requested date range.
   Future<AsleepAverageReport> getAverageReport(String fromDate, String toDate) {
     _ensureReady();
     return _platform.getAverageReport(fromDate, toDate);
   }
 
+  /// Deletes the session identified by [sessionId].
   Future<void> deleteSession(String sessionId) {
     _ensureReady();
     return _platform.deleteSession(sessionId);
   }
 
+  /// Enables or disables native SDK diagnostic logging.
   Future<void> setLoggingEnabled(bool enabled) {
     _ensureOpen();
     return _platform.setLoggingEnabled(enabled);
   }
 
+  /// Removes the current error from [state].
   void clearError() {
     _ensureOpen();
     if (_state.error != null) {
@@ -174,6 +201,7 @@ class AsleepClient {
     }
   }
 
+  /// Releases native resources and closes the client's streams.
   Future<void> dispose() async {
     if (_disposed) {
       return;

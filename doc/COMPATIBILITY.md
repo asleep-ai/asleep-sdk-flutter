@@ -118,7 +118,7 @@ Intentional Dart translations:
 
 | Capability | Android | iOS | Compatibility treatment |
 |---|---|---|---|
-| Persistent tracking restore | Foreground service can survive UI process | No equivalent persistent service in RN baseline | `RestoreResult` remains cross-platform; normally false on iOS |
+| Persistent tracking restore | Foreground service can survive UI process | Native manager reports its current session ID | `RestoreResult` uses each native status accessor |
 | Battery optimization | Real system setting | Not applicable | iOS returns exempt |
 | Foreground notification configuration | Required/supported | Not applicable | Nested Android option |
 | Extra audio-session options | Not applicable | Supported | Nested iOS option |
@@ -138,6 +138,13 @@ Intentional Dart translations:
 - New native events are delivered as `UnknownNativeEvent` until the Dart API
   adds a typed event.
 
+AsleepSDK iOS 3.2.0 reports a session ID for both its internal open and closed
+states. The public status type exposes only that nullable ID, so the Flutter
+bridge follows the same restore check as the React Native bridge. A closed
+session can therefore be reported as restorable after a new Flutter engine is
+created. A future native SDK must expose an explicit active-state accessor
+before this ambiguity can be removed without relying on private internals.
+
 ## Publication Metadata: UNKNOWN
 
 The following values must not be guessed:
@@ -145,7 +152,7 @@ The following values must not be guessed:
 - final pub.dev package name and ownership;
 - package version and stability promise;
 - public repository URL and source visibility;
-- homepage, issue tracker, documentation URL, topics, and funding metadata;
+- issue tracker, documentation URL, final topics, and funding metadata;
 - copyright holder and approved license text;
 - publishing organization and pub.dev automated-publishing identity;
 - Maven/CocoaPods/SPM artifact coordinates intended for third-party consumers;
@@ -154,9 +161,9 @@ The following values must not be guessed:
 - supported Flutter/Dart lower bounds for the real consumer fleet;
 - supported Android/iOS version matrix and deprecation policy.
 
-The package uses the verified Asleep product homepage and an explicit
-license-pending notice. A public repository URL, issue tracker, approved
-license grant, and copyright holder remain release blockers.
+The package uses the verified Asleep product homepage, conservative draft
+topics, and an explicit license-pending notice. A public repository URL, issue
+tracker, approved license grant, and copyright holder remain release blockers.
 
 ## Release Blockers
 

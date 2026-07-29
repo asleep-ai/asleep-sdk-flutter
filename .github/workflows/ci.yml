@@ -53,13 +53,16 @@ jobs:
       - name: Generate API documentation
         run: dart doc
 
+      - name: Report dependency freshness
+        run: flutter pub outdated
+
       - name: Validate package
         run: dart pub publish --dry-run
 
   android:
     name: Android bridge and example
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v6
