@@ -162,6 +162,25 @@ void main() {
       expect(platform.configureCount, 1);
     });
 
+    for (final event in <AsleepEvent>[
+      const TrackingCreatedEvent(sessionId: 'restored-session'),
+      const TrackingUploadedEvent(sequence: 1),
+    ]) {
+      test('preserves restored-session configure access after '
+          '${event.runtimeType}', () async {
+        platform.hasActiveSession = true;
+        await client.checkAndRestoreTracking();
+
+        platform.emit(event);
+        await client.configure(
+          const AsleepConfiguration(apiKey: 'test-api-key'),
+        );
+
+        expect(client.state.setupStatus, SetupStatus.complete);
+        expect(platform.configureCount, 1);
+      });
+    }
+
     test('requires restore and battery checks before startTracking', () async {
       await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
 

@@ -499,8 +499,6 @@ class AsleepClient {
     switch (event) {
       case TrackingCreatedEvent():
         final sessionId = _nonEmpty(event.sessionId);
-        _preflightRestoreDetected = false;
-        _preflightConfigureAllowed = false;
         _startPending = false;
         _recordingDeadSession = false;
         _setState(
@@ -513,8 +511,6 @@ class AsleepClient {
           ),
         );
       case TrackingUploadedEvent():
-        _preflightRestoreDetected = false;
-        _preflightConfigureAllowed = false;
         final wasRecovering =
             _state.trackingStatus == TrackingStatus.recoveryRequired;
         _startPending = false;
