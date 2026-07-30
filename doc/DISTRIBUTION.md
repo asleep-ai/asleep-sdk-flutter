@@ -20,6 +20,12 @@ compliance follow-up for the native SDK, not a technical blocker for publishing
 this source-only Flutter package. The missing upstream license file is a
 CocoaPods lint warning; the native binary is not included in the pub archive.
 
+External dependency access was rechecked on 2026-07-30. Android
+`ai.asleep:asleepsdk:3.2.1` is downloadable from Maven Central, and the
+`AsleepSDK` 3.2.0 CocoaPods spec resolves to a publicly downloadable GitHub
+release asset. Consumers still need Asleep credentials and application review
+to use the service.
+
 On 2026-07-30, the pub.dev API endpoint for
 `asleep_sdk_flutter` returned HTTP 404. This is evidence that no public package
 currently uses the name, not a reservation. Recheck immediately before the
@@ -70,8 +76,8 @@ The release owner must resolve every item before the first upload:
 2. Recheck that `asleep_sdk_flutter` is still unused on pub.dev.
 3. Provide public source and issue URLs or keep both fields omitted. Do not
    expose private GitHub URLs as broken public package metadata.
-4. Resolve the native Android Maven and iOS CocoaPods artifact access policy
-   for external consumers.
+4. Recheck that the pinned Android Maven and iOS CocoaPods artifacts remain
+   publicly downloadable for external consumers.
 5. Confirm the supported Flutter, Dart, Android, iOS, Asleep Android SDK, and
    Asleep iOS SDK version ranges.
 6. Review the exact `dart pub publish --dry-run` archive and run the secret

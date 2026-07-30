@@ -30,9 +30,11 @@ the release commit changes before manual publish.
 | Archive inspection | Sensitive filename and credential-pattern scan of the clean `git archive HEAD` package copy | Pass |
 | Workflow lint | `actionlint .github/workflows/*.yml` | Pass |
 | Android bridge | Gradle compile, unit tests, lint, manifest processing | Pass, including 20 bridge tests, release lint, and a merged manifest without forced battery-exemption permission |
+| Android native artifact | Maven Central POM and AAR download for `ai.asleep:asleepsdk:3.2.1` | Pass |
 | Android example | `flutter build apk --release` from `example` | Pass; release APK is approximately 93.9 MB |
 | Android device launch | `android run --device=R5KL105975E --apks=.../app-debug.apk`, then `android layout` | The earlier baseline passed on `SM-X236N`, Android 16; no current-candidate device runtime verification |
 | CocoaPods plugin | `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer pod lib lint asleep_sdk_flutter.podspec --allow-warnings --skip-tests` | Wrapper validation passes; the upstream `AsleepSDK` 3.2.0 pod still warns that its declared license file is missing |
+| iOS native artifact | CocoaPods trunk metadata and the `AsleepSDK` 3.2.0 GitHub release asset | Pass; public download succeeds |
 | iOS bridge tests | `xcodebuild -workspace Runner.xcworkspace -scheme Runner -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test CODE_SIGNING_ALLOWED=NO` from `example/ios` | Pass, 3 tests |
 | iOS example | `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer flutter build ios --release --no-codesign` from `example` | Pass; unsigned device app is approximately 45.9 MB |
 
