@@ -7,4 +7,19 @@ class RunnerTests: XCTestCase {
     let plugin = AsleepSdkFlutterPlugin()
     XCTAssertNotNil(plugin)
   }
+
+  func testTrackingStartRetryWaitsForTimedOutAttemptToTerminate() {
+    var gate = TrackingStartRecoveryGate()
+
+    XCTAssertTrue(gate.canStart)
+    gate.requireRecovery()
+
+    XCTAssertFalse(gate.canStart)
+    XCTAssertFalse(gate.acceptsCreatedSession)
+
+    gate.didTerminate()
+
+    XCTAssertTrue(gate.canStart)
+    XCTAssertTrue(gate.acceptsCreatedSession)
+  }
 }

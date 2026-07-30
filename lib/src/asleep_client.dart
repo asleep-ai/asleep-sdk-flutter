@@ -170,17 +170,19 @@ class AsleepClient {
 
   /// Checks for a native tracking session that can be restored.
   Future<RestoreResult> checkAndRestoreTracking() async {
-    _ensureReady();
-    if (_hasPendingLifecycleCommand) {
+    _ensureOpen();
+    if (_initializationInFlight || _hasPendingLifecycleCommand) {
       throw const AsleepException(
         AsleepErrorCode.invalidState,
-        'Cannot restore tracking while a lifecycle command is in progress.',
+        'Cannot restore tracking while initialization or a lifecycle command '
+        'is in progress.',
       );
     }
+    _attachEvents();
     final result = await _platform.checkAndRestoreTracking();
     final stalePreflight = _preflightRestoreDetected;
-    _preflightRestoreDetected = false;
-    _preflightConfigureAllowed = false;
+    _preflightRestoreDetected = result.hasActiveSession;
+    _preflightConfigureAllowed = result.hasActiveSession && !_initialized;
     _trackingStatusChecked = true;
     if (result.hasActiveSession) {
       _recordingDeadSession = false;

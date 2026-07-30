@@ -32,6 +32,26 @@ private enum NativeSdkOwnerRegistry {
   }
 }
 
+struct TrackingStartRecoveryGate {
+  private(set) var isRecoveryRequired = false
+
+  var canStart: Bool {
+    !isRecoveryRequired
+  }
+
+  var acceptsCreatedSession: Bool {
+    !isRecoveryRequired
+  }
+
+  mutating func requireRecovery() {
+    isRecoveryRequired = true
+  }
+
+  mutating func didTerminate() {
+    isRecoveryRequired = false
+  }
+}
+
 public final class AsleepSdkFlutterPlugin: NSObject, FlutterPlugin {
   private let events = IosEventsStreamHandler()
   private lazy var hostApi = IosAsleepHostApi(events: events)
@@ -115,6 +135,7 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
   private var trackingStartTimeout: DispatchWorkItem?
   private var nextTrackingStartGeneration: UInt64 = 0
   private var activeTrackingStartGeneration: UInt64?
+  private var trackingStartRecoveryGate = TrackingStartRecoveryGate()
   private var detached = false
 
   init(events: IosEventsStreamHandler) {
@@ -245,6 +266,10 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
       completion(.failure(BridgeError.trackingStartInProgress))
       return
     }
+    guard trackingStartRecoveryGate.canStart else {
+      completion(.failure(BridgeError.trackingStartRecoveryRequired))
+      return
+    }
     var options: AVAudioSession.CategoryOptions = []
     for option in message.iosAudioSessionOptions {
       switch option {
@@ -264,6 +289,7 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
     activeTrackingStartGeneration = generation
     let timeout = DispatchWorkItem { [weak self] in
       guard self?.activeTrackingStartGeneration == generation else { return }
+      self?.trackingStartRecoveryGate.requireRecovery()
       self?.finishTrackingStart(
         .failure(BridgeError.trackingStartTimeout),
         generation: generation
@@ -290,6 +316,9 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
     guard let trackingManager else {
       completion(.failure(BridgeError.trackingManagerUnavailable))
       return
+    }
+    if activeTrackingStartGeneration != nil {
+      trackingStartRecoveryGate.requireRecovery()
     }
     finishTrackingStart(.failure(BridgeError.trackingStartCancelled))
     trackingManager.stopTracking()
@@ -433,6 +462,7 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
     configureCompletion?(.failure(BridgeError.engineDetached))
     configureCompletion = nil
     finishTrackingStart(.failure(BridgeError.engineDetached))
+    trackingStartRecoveryGate.didTerminate()
     trackingManager = nil
     reportManager = nil
     config = nil
@@ -649,6 +679,10 @@ extension IosAsleepHostApi: AsleepConfigDelegate {
 extension IosAsleepHostApi: AsleepSleepTrackingManagerDelegate {
   func didCreate() {
     guard !detached else { return }
+    guard trackingStartRecoveryGate.acceptsCreatedSession else {
+      trackingManager?.stopTracking()
+      return
+    }
     guard let generation = activeTrackingStartGeneration else {
       trackingManager?.stopTracking()
       return
@@ -666,6 +700,7 @@ extension IosAsleepHostApi: AsleepSleepTrackingManagerDelegate {
 
   func didClose(sessionId: String) {
     guard !detached else { return }
+    trackingStartRecoveryGate.didTerminate()
     trackingActive = false
     finishTrackingStart(.failure(BridgeError.trackingClosedBeforeStart))
     emit("onTrackingClosed", ["sessionId": sessionId])
@@ -700,6 +735,7 @@ extension IosAsleepHostApi: AsleepSleepTrackingManagerDelegate {
 
   func micPermissionWasDenied() {
     guard !detached else { return }
+    trackingStartRecoveryGate.didTerminate()
     activeTrackingStartGeneration = nil
     emit("onMicPermissionDenied") { [weak self] in
       self?.finishTrackingStart(.failure(BridgeError.microphonePermissionDenied))
@@ -775,6 +811,7 @@ private enum BridgeError: LocalizedError {
   case trackingManagerUnavailable
   case trackingNotActive
   case trackingStartInProgress
+  case trackingStartRecoveryRequired
   case trackingStartTimeout
   case trackingStartCancelled
   case trackingClosedBeforeStart
@@ -797,6 +834,8 @@ private enum BridgeError: LocalizedError {
       return "Sleep tracking is not active"
     case .trackingStartInProgress:
       return "Tracking start is already in progress"
+    case .trackingStartRecoveryRequired:
+      return "Wait for the timed-out or cancelled tracking start to close before retrying"
     case .trackingStartTimeout:
       return "The native Asleep SDK did not acknowledge tracking start"
     case .trackingStartCancelled:

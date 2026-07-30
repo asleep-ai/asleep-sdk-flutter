@@ -102,11 +102,19 @@ class _AsleepExamplePageState extends State<AsleepExamplePage> {
                       'Enter an API key first.',
                     );
                   }
-                  await _client.initialize(AsleepSetupOptions(apiKey: apiKey));
-                  await _client.checkAndRestoreTracking();
+                  final restore = await _client.checkAndRestoreTracking();
+                  if (restore.hasActiveSession) {
+                    await _client.configure(
+                      AsleepConfiguration(apiKey: apiKey),
+                    );
+                  } else {
+                    await _client.initialize(
+                      AsleepSetupOptions(apiKey: apiKey),
+                    );
+                  }
                   await _client.checkBatteryOptimization();
                 }),
-                child: const Text('Initialize'),
+                child: const Text('Initialize / restore'),
               ),
               OutlinedButton(
                 onPressed: () => _run(() async {

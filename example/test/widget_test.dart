@@ -5,7 +5,7 @@ void main() {
   testWidgets('renders the explicit SDK journey', (tester) async {
     await tester.pumpWidget(const AsleepExampleApp());
 
-    expect(find.text('Initialize'), findsOneWidget);
+    expect(find.text('Initialize / restore'), findsOneWidget);
     expect(find.text('Check permission'), findsOneWidget);
     expect(find.text('Start'), findsOneWidget);
     expect(find.text('Stop'), findsOneWidget);

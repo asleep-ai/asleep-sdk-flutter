@@ -28,7 +28,6 @@ import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.PluginRegistry
 
 internal const val TRACKING_START_TIMEOUT_MILLIS = 30_000L
-internal const val CONFIGURATION_TIMEOUT_MILLIS = 30_000L
 
 internal val TERMINAL_TRACKING_ERROR_CODES =
     setOf(
@@ -343,8 +342,6 @@ private class AndroidAsleepHostApi(
     private var permissionCallback: ((Result<Boolean>) -> Unit)? = null
     private var setupInFlight = false
     private var configureInFlight = false
-    private var setupTimeout: Runnable? = null
-    private var configureTimeout: Runnable? = null
     private var detached = false
     private var startRecoveryRequired = false
     private val trackingStartCoordinator =
@@ -376,24 +373,6 @@ private class AndroidAsleepHostApi(
         }
         setupCallback = callback
         setupInFlight = true
-        setupTimeout =
-            Runnable {
-                emit(
-                    "onSetupDidFail",
-                    mapOf(
-                        "code" to "SETUP_TIMEOUT",
-                        "message" to "The native Asleep SDK did not complete setup",
-                    ),
-                )
-                finishSetup(
-                    Result.failure(
-                        FlutterError(
-                            code = "SETUP_TIMEOUT",
-                            message = "The native Asleep SDK did not complete setup",
-                        ),
-                    ),
-                )
-            }.also { mainHandler.postDelayed(it, CONFIGURATION_TIMEOUT_MILLIS) }
         try {
             Asleep.setup(
                 context = context,
@@ -434,24 +413,6 @@ private class AndroidAsleepHostApi(
         }
         configureCallback = callback
         configureInFlight = true
-        configureTimeout =
-            Runnable {
-                emit(
-                    "onUserJoinFailed",
-                    mapOf(
-                        "code" to "CONFIGURATION_TIMEOUT",
-                        "message" to "The native Asleep SDK did not complete configuration",
-                    ),
-                )
-                finishConfigure(
-                    Result.failure(
-                        FlutterError(
-                            code = "CONFIGURATION_TIMEOUT",
-                            message = "The native Asleep SDK did not complete configuration",
-                        ),
-                    ),
-                )
-            }.also { mainHandler.postDelayed(it, CONFIGURATION_TIMEOUT_MILLIS) }
         try {
             Asleep.initAsleepConfig(
                 context = context,
@@ -826,10 +787,6 @@ private class AndroidAsleepHostApi(
         configureCallback?.invoke(Result.failure(IllegalStateException("Flutter engine detached")))
         configureCallback = null
         configureInFlight = false
-        setupTimeout?.let(mainHandler::removeCallbacks)
-        setupTimeout = null
-        configureTimeout?.let(mainHandler::removeCallbacks)
-        configureTimeout = null
         permissionCallback?.invoke(Result.failure(IllegalStateException("Flutter engine detached")))
         permissionCallback = null
         trackingStartCoordinator.failCurrent(IllegalStateException("Flutter engine detached"))
@@ -925,8 +882,6 @@ private class AndroidAsleepHostApi(
         ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
     private fun finishConfigure(result: Result<Unit>) {
-        configureTimeout?.let(mainHandler::removeCallbacks)
-        configureTimeout = null
         configureCallback?.invoke(result)
         configureCallback = null
         configureInFlight = false
@@ -989,8 +944,6 @@ private class AndroidAsleepHostApi(
     }
 
     private fun finishSetup(result: Result<Unit>) {
-        setupTimeout?.let(mainHandler::removeCallbacks)
-        setupTimeout = null
         setupCallback?.invoke(result)
         setupCallback = null
         setupInFlight = false

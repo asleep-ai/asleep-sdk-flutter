@@ -271,7 +271,7 @@ jobs:
       needs.validate.result == 'success' &&
       needs.android.result == 'success' &&
       needs.ios.result == 'success' &&
-      needs.publish.result == 'success' &&
+      (needs.publish.result == 'success' || needs.publish.result == 'skipped') &&
       vars.RELEASE_CREATION_ENABLED == 'true'
     runs-on: ubuntu-latest
     permissions:

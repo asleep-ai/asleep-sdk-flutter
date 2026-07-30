@@ -147,15 +147,19 @@ void main() {
       expect(client.state.sessionId, 'session-1');
     });
 
-    test('projects a restored native session into tracking state', () async {
+    test('restores before initialization and then permits configure', () async {
       platform.hasActiveSession = true;
-      await client.configure(const AsleepConfiguration(apiKey: 'test-api-key'));
 
       final result = await client.checkAndRestoreTracking();
 
       expect(result.hasActiveSession, isTrue);
       expect(client.state.trackingStatus, TrackingStatus.tracking);
       expect(client.state.didClose, isFalse);
+
+      await client.configure(const AsleepConfiguration(apiKey: 'test-api-key'));
+
+      expect(client.state.setupStatus, SetupStatus.complete);
+      expect(platform.configureCount, 1);
     });
 
     test('requires restore and battery checks before startTracking', () async {
@@ -572,8 +576,12 @@ void main() {
       );
 
       expect(client.state.setupStatus, SetupStatus.idle);
+      expect(
+        (await client.checkAndRestoreTracking()).hasActiveSession,
+        isFalse,
+      );
       await expectLater(
-        client.checkAndRestoreTracking(),
+        client.checkBatteryOptimization(),
         throwsInvalidStateContaining('initialize'),
       );
     });
@@ -667,8 +675,12 @@ void main() {
       );
 
       expect(client.state.setupStatus, SetupStatus.idle);
+      expect(
+        (await client.checkAndRestoreTracking()).hasActiveSession,
+        isFalse,
+      );
       await expectLater(
-        client.checkAndRestoreTracking(),
+        client.checkBatteryOptimization(),
         throwsInvalidStateContaining('initialize'),
       );
     });

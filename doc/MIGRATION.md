@@ -6,10 +6,10 @@ Flutter 0.1.0. It is not a promise of one-to-one naming compatibility.
 | React Native 1.2 | Flutter 0.1.0 | Notes |
 |---|---|---|
 | `useAsleep()` | `AsleepClient.state`, `states`, `events` | Flutter does not expose a React-shaped hook or third-party store. |
-| `Asleep.initialize()` | Construct one `AsleepClient`; call `initialize()` or `configure()` | Dispose the client when its application owner is destroyed. |
+| `Asleep.initialize()` | Construct one `AsleepClient`; check restoration, then call `initialize()` or `configure()` | Dispose the client when its application owner is destroyed. |
 | `setup(config)` | `initialize(AsleepSetupOptions)` | The future completes after native setup and configuration are ready; progress and the projected lifecycle remain event-driven. |
 | `initAsleepConfig(config)` | `configure(AsleepConfiguration)` | Use when the user-oriented configuration path is required. |
-| `checkAndRestoreTracking()` | Same name | Initialization/configuration runs an Android preflight before native setup. The explicit check rechecks service liveness and reconnects the listener; iOS returns no process-persistent session. |
+| `checkAndRestoreTracking()` | Same name | Call before initialization. Configure a surviving Android session; otherwise initialize a fresh session. iOS returns no process-persistent session. |
 | `hasRequiredPermissions()` | Same name | This check never opens a system dialog. |
 | `requestRequiredPermissions()` | Same name | Call only from an application-controlled user interaction. |
 | `startTracking(config)` | `startTracking(options)` | Throws `permissionRequired`; it never requests permission automatically. |
