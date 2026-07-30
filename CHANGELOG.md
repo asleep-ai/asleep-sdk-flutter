@@ -9,6 +9,13 @@
   cadence, recovery handling, and terminal-failure suppression.
 - Add strict native payload validation, immutable public models, serialized
   lifecycle commands, and deterministic EventChannel cleanup.
+- Reject conflicting setup, configuration, start, stop, restore, and analysis
+  commands while preserving structured native failures and live restored
+  sessions.
+- Cancel timed-out or superseded native tracking starts so late callbacks
+  cannot resurrect or resolve the wrong session.
+- Expose the complete report-stat and sleep-session payload used by the
+  supported native SDKs.
 - Restore Android foreground-service listeners after UI-process recreation
   without treating iOS closed-session identifiers as active sessions.
 - Preserve native SDK error codes and page report-list requests beyond the

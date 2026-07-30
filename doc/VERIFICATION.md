@@ -20,19 +20,19 @@ the release commit changes before manual publish.
 |---|---|---|
 | Dart format | `dart format --output=none --set-exit-if-changed lib test example/lib example/test example/integration_test pigeons` | Pass |
 | Static analysis | `flutter analyze` | Pass with no issues |
-| Dart contract tests | `flutter test` | Pass, 51 tests |
+| Dart contract tests | `flutter test` | Pass, 74 tests |
 | Example widget test | `(cd example && flutter test)` | Pass, 1 test |
 | Dart API docs | `dart doc` | Pass with no warnings or errors |
 | API baseline | `dart pub global run dart_apitool:main extract --input . --set-exit-on-missing-export --force-use-flutter` with 0.23.2 | Pass |
 | Dependency freshness | `flutter pub outdated` | All dependencies are the newest resolvable versions; 8 newer versions are incompatible with the selected SDK constraints |
 | Pub score | pana 0.23.15 against a disposable package copy | 140/160: 20/30 conventions, 20/20 documentation, 10/20 platform support, 50/50 static analysis, 40/40 dependencies |
-| Package validation | `dart pub publish --dry-run` in a clean `git archive HEAD` package copy | Pass with 0 warnings; compressed public archive is approximately 89 KB |
+| Package validation | `dart pub publish --dry-run` in a clean `git archive HEAD` package copy | Pass with 0 warnings; compressed public archive is approximately 94 KB |
 | Archive inspection | Sensitive filename and credential-pattern scan of the clean `git archive HEAD` package copy | Pass |
 | Workflow lint | `actionlint .github/workflows/*.yml` | Pass |
 | Android bridge | Gradle compile, unit tests, lint, manifest processing | Pass, including 16 bridge tests, release lint, and a merged manifest without forced battery-exemption permission |
-| Android example | `flutter build apk --debug` and `flutter build apk --release` from `example` | Pass; release APK is approximately 93.8 MB |
+| Android example | `flutter build apk --release` from `example` | Pass; release APK is approximately 93.9 MB |
 | Android device launch | `android run --device=R5KL105975E --apks=.../app-debug.apk`, then `android layout` | The earlier baseline passed on `SM-X236N`, Android 16; no current-candidate device runtime verification |
-| CocoaPods plugin | `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer pod lib lint asleep_sdk_flutter.podspec --allow-warnings --skip-tests` | Pass with the pinned `AsleepSDK` 3.2.0; the upstream pod still warns about its missing license file |
+| CocoaPods plugin | `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer pod lib lint asleep_sdk_flutter.podspec --allow-warnings --skip-tests` | Wrapper validation passes; the upstream `AsleepSDK` 3.2.0 pod still warns that its declared license file is missing |
 | iOS example | `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer flutter build ios --release --no-codesign` from `example` | Pass; unsigned device app is approximately 45.9 MB |
 
 ## Important verification notes
@@ -61,6 +61,20 @@ AsleepSDK 3.2.0 retains a session ID after close, so the public identifier
 cannot prove that a process-persistent tracking session exists. The current
 Swift implementation, complete pagination, pod lint, and unsigned release
 build pass locally.
+
+The pinned AsleepSDK 3.2.0 framework uses APIs that require its own accurate
+privacy declarations, but the distributed framework has no
+`PrivacyInfo.xcprivacy`. This is a native SDK App Store compliance follow-up,
+not a pub.dev publication blocker. Its podspec-declared license file is also
+absent, which CocoaPods reports as a warning.
+
+The source framework's original code seal references Swift module files that
+CocoaPods removes during embedding. CocoaPods then signs the embedded dynamic
+framework with the consuming application's signing identity. Reproducing that
+copy, strip, and re-sign sequence passes strict code-signature verification.
+AsleepSDK is not in Apple's current list of third-party SDKs that require an
+upstream SDK signature, so source-archive signature verification is not a
+valid release gate for this package.
 
 Android restoration now performs an attachment-time
 `isSleepTrackingAlive(context)` probe before setup/configuration can assign the

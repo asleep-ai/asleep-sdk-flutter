@@ -1,12 +1,48 @@
 import 'dart:async';
 
 import 'package:asleep_sdk_flutter/asleep_sdk_flutter.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:asleep_sdk_flutter/src/pigeon_asleep_platform.dart';
 import 'package:asleep_sdk_flutter/src/transport.g.dart' as transport;
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('rejects unknown native analysis request statuses', () async {
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    const channelName =
+        'dev.flutter.pigeon.asleep_sdk_flutter.AsleepHostApi.requestAnalysis';
+    final channel = BasicMessageChannel<Object?>(
+      channelName,
+      transport.AsleepHostApi.pigeonChannelCodec,
+      binaryMessenger: messenger,
+    );
+    messenger.setMockDecodedMessageHandler<Object?>(
+      channel,
+      (_) async => <Object?>[
+        transport.AnalysisRequestMessage(
+          status: 'compeleted',
+          timestampMilliseconds: null,
+          resultJson: null,
+        ),
+      ],
+    );
+    addTearDown(
+      () => messenger.setMockDecodedMessageHandler<Object?>(channel, null),
+    );
+    final platform = PigeonAsleepPlatform(
+      hostApi: transport.AsleepHostApi(binaryMessenger: messenger),
+    );
+
+    await expectLater(
+      platform.requestAnalysis(),
+      throwsA(malformedPayloadException),
+    );
+  });
+
   group('PigeonAsleepPlatform event transport', () {
     test(
       'cancelling the mapped stream cancels the native event stream',

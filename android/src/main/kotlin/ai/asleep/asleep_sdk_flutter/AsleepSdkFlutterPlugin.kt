@@ -28,6 +28,7 @@ import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.PluginRegistry
 
 internal const val TRACKING_START_TIMEOUT_MILLIS = 30_000L
+internal const val CONFIGURATION_TIMEOUT_MILLIS = 30_000L
 
 internal val TERMINAL_TRACKING_ERROR_CODES =
     setOf(
@@ -76,6 +77,7 @@ internal fun nativeSdkError(errorCode: Int, detail: String): FlutterError =
 internal class TrackingStartCoordinator(
     private val schedule: (Runnable, Long) -> Unit,
     private val cancel: (Runnable) -> Unit,
+    private val onTimeout: () -> Unit = {},
 ) {
     private var callback: ((Result<Unit>) -> Unit)? = null
     private var timeout: Runnable? = null
@@ -91,25 +93,30 @@ internal class TrackingStartCoordinator(
         latestAttempt = attempt
         val timeout =
             Runnable {
-                finish(
-                    attempt,
-                    Result.failure(
-                        FlutterError(
-                            code = "TRACKING_START_TIMEOUT",
-                            message = "The native Asleep SDK did not acknowledge tracking start",
+                if (activeAttempt == attempt) {
+                    onTimeout()
+                    finish(
+                        attempt,
+                        Result.failure(
+                            FlutterError(
+                                code = "TRACKING_START_TIMEOUT",
+                                message = "The native Asleep SDK did not acknowledge tracking start",
+                            ),
                         ),
-                    ),
-                )
+                        keepLatest = false,
+                    )
+                }
             }
         this.timeout = timeout
         schedule(timeout, TRACKING_START_TIMEOUT_MILLIS)
         return attempt
     }
 
-    fun succeed(attempt: Long): Boolean = finish(attempt, Result.success(Unit))
+    fun succeed(attempt: Long): Boolean =
+        finish(attempt, Result.success(Unit), keepLatest = true)
 
     fun fail(attempt: Long, error: Throwable): Boolean =
-        finish(attempt, Result.failure(error))
+        finish(attempt, Result.failure(error), keepLatest = false)
 
     fun failCurrent(error: Throwable): Boolean {
         val attempt = activeAttempt ?: return false
@@ -121,11 +128,18 @@ internal class TrackingStartCoordinator(
     val isInFlight: Boolean
         get() = callback != null
 
-    private fun finish(attempt: Long, result: Result<Unit>): Boolean {
+    private fun finish(
+        attempt: Long,
+        result: Result<Unit>,
+        keepLatest: Boolean,
+    ): Boolean {
         if (activeAttempt != attempt) return false
         val currentCallback = callback ?: return false
         callback = null
         activeAttempt = null
+        if (!keepLatest && latestAttempt == attempt) {
+            latestAttempt = null
+        }
         timeout?.let(cancel)
         timeout = null
         currentCallback(result)
@@ -283,9 +297,22 @@ private class AndroidEventsStreamHandler : EventsStreamHandler() {
         sink = null
     }
 
-    fun emit(type: String, payloadJson: String) {
-        mainHandler.post {
-            sink?.success(NativeEventMessage(type = type, payloadJson = payloadJson))
+    fun emit(
+        type: String,
+        payloadJson: String,
+        shouldDeliver: () -> Boolean = { true },
+        completion: (() -> Unit)? = null,
+    ) {
+        val deliver =
+            Runnable {
+                if (!shouldDeliver()) return@Runnable
+                sink?.success(NativeEventMessage(type = type, payloadJson = payloadJson))
+                completion?.invoke()
+            }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            deliver.run()
+        } else {
+            mainHandler.post(deliver)
         }
     }
 
@@ -316,11 +343,18 @@ private class AndroidAsleepHostApi(
     private var permissionCallback: ((Result<Boolean>) -> Unit)? = null
     private var setupInFlight = false
     private var configureInFlight = false
+    private var setupTimeout: Runnable? = null
+    private var configureTimeout: Runnable? = null
     private var detached = false
+    private var startRecoveryRequired = false
     private val trackingStartCoordinator =
         TrackingStartCoordinator(
             schedule = mainHandler::postDelayed,
             cancel = mainHandler::removeCallbacks,
+            onTimeout = {
+                startRecoveryRequired = true
+                runCatching(Asleep::endSleepTracking)
+            },
         )
     private val nativeLogger =
         DynamicAsleepLogger(
@@ -342,6 +376,24 @@ private class AndroidAsleepHostApi(
         }
         setupCallback = callback
         setupInFlight = true
+        setupTimeout =
+            Runnable {
+                emit(
+                    "onSetupDidFail",
+                    mapOf(
+                        "code" to "SETUP_TIMEOUT",
+                        "message" to "The native Asleep SDK did not complete setup",
+                    ),
+                )
+                finishSetup(
+                    Result.failure(
+                        FlutterError(
+                            code = "SETUP_TIMEOUT",
+                            message = "The native Asleep SDK did not complete setup",
+                        ),
+                    ),
+                )
+            }.also { mainHandler.postDelayed(it, CONFIGURATION_TIMEOUT_MILLIS) }
         try {
             Asleep.setup(
                 context = context,
@@ -353,14 +405,17 @@ private class AndroidAsleepHostApi(
                 asleepLogger = nativeLogger,
                 asleepSetupListener = object : Asleep.AsleepSetupListener {
                     override fun onComplete() {
+                        if (setupCallback == null) return
                         configureAfterSetup(message)
                     }
 
                     override fun onProgress(progress: Int) {
+                        if (setupCallback == null) return
                         emit("onSetupInProgress", mapOf("progress" to progress))
                     }
 
                     override fun onFail(errorCode: Int, detail: String) {
+                        if (setupCallback == null) return
                         emit("onSetupDidFail", errorPayload(errorCode, detail, "SETUP_FAILED"))
                         finishSetup(Result.failure(nativeSdkError(errorCode, detail)))
                     }
@@ -379,6 +434,24 @@ private class AndroidAsleepHostApi(
         }
         configureCallback = callback
         configureInFlight = true
+        configureTimeout =
+            Runnable {
+                emit(
+                    "onUserJoinFailed",
+                    mapOf(
+                        "code" to "CONFIGURATION_TIMEOUT",
+                        "message" to "The native Asleep SDK did not complete configuration",
+                    ),
+                )
+                finishConfigure(
+                    Result.failure(
+                        FlutterError(
+                            code = "CONFIGURATION_TIMEOUT",
+                            message = "The native Asleep SDK did not complete configuration",
+                        ),
+                    ),
+                )
+            }.also { mainHandler.postDelayed(it, CONFIGURATION_TIMEOUT_MILLIS) }
         try {
             Asleep.initAsleepConfig(
                 context = context,
@@ -390,6 +463,7 @@ private class AndroidAsleepHostApi(
                 asleepLogger = nativeLogger,
                 asleepConfigListener = object : Asleep.AsleepConfigListener {
                     override fun onSuccess(userId: String?, asleepConfig: AsleepConfig?) {
+                        if (configureCallback == null) return
                         if (asleepConfig == null) {
                             finishConfigure(Result.failure(IllegalStateException("Native AsleepConfig is null")))
                             return
@@ -403,6 +477,7 @@ private class AndroidAsleepHostApi(
                     }
 
                     override fun onFail(errorCode: Int, detail: String) {
+                        if (configureCallback == null) return
                         emit(
                             "onUserJoinFailed",
                             errorPayload(errorCode, detail, "INITIALIZATION_FAILED"),
@@ -423,6 +498,9 @@ private class AndroidAsleepHostApi(
         if (!claimNativeSdk(callback)) return
         try {
             val active = trackingRestorer.restore()
+            if (!active) {
+                startRecoveryRequired = false
+            }
             callback(Result.success(RestoreMessage(hasActiveSession = active)))
         } catch (error: Throwable) {
             callback(Result.failure(error))
@@ -526,6 +604,17 @@ private class AndroidAsleepHostApi(
             callback(Result.failure(SecurityException("Required microphone permissions are not granted")))
             return
         }
+        if (startRecoveryRequired) {
+            callback(
+                Result.failure(
+                    FlutterError(
+                        code = "TRACKING_START_RECOVERY_REQUIRED",
+                        message = "Call checkAndRestoreTracking before retrying a timed-out or cancelled start",
+                    ),
+                ),
+            )
+            return
+        }
         try {
             if (Asleep.isSleepTrackingAlive(context)) {
                 callback(
@@ -578,9 +667,13 @@ private class AndroidAsleepHostApi(
     override fun stopTracking(callback: (Result<Unit>) -> Unit) {
         if (!requireNativeSdkOwner(callback)) return
         try {
-            trackingStartCoordinator.failCurrent(
-                IllegalStateException("Tracking start was cancelled by stopTracking"),
-            )
+            if (
+                trackingStartCoordinator.failCurrent(
+                    IllegalStateException("Tracking start was cancelled by stopTracking"),
+                )
+            ) {
+                startRecoveryRequired = true
+            }
             Asleep.endSleepTracking()
             callback(Result.success(Unit))
         } catch (error: Throwable) {
@@ -729,8 +822,14 @@ private class AndroidAsleepHostApi(
         detached = true
         setupCallback?.invoke(Result.failure(IllegalStateException("Flutter engine detached")))
         setupCallback = null
+        setupInFlight = false
         configureCallback?.invoke(Result.failure(IllegalStateException("Flutter engine detached")))
         configureCallback = null
+        configureInFlight = false
+        setupTimeout?.let(mainHandler::removeCallbacks)
+        setupTimeout = null
+        configureTimeout?.let(mainHandler::removeCallbacks)
+        configureTimeout = null
         permissionCallback?.invoke(Result.failure(IllegalStateException("Flutter engine detached")))
         permissionCallback = null
         trackingStartCoordinator.failCurrent(IllegalStateException("Flutter engine detached"))
@@ -747,13 +846,26 @@ private class AndroidAsleepHostApi(
 
             override fun onStart(sessionId: String) {
                 if (!isCurrentAttempt()) return
-                emit("onTrackingCreated", mapOf("sessionId" to sessionId))
-                startAttempt?.let(trackingStartCoordinator::succeed)
+                emit(
+                    "onTrackingCreated",
+                    mapOf("sessionId" to sessionId),
+                    shouldDeliver = ::isCurrentAttempt,
+                ) {
+                    startAttempt?.let {
+                        if (trackingStartCoordinator.succeed(it)) {
+                            startRecoveryRequired = false
+                        }
+                    }
+                }
             }
 
             override fun onPerform(sequence: Int) {
                 if (!isCurrentAttempt()) return
-                emit("onTrackingUploaded", mapOf("sequence" to sequence))
+                emit(
+                    "onTrackingUploaded",
+                    mapOf("sequence" to sequence),
+                    shouldDeliver = ::isCurrentAttempt,
+                )
             }
 
             override fun onFinish(sessionId: String?) {
@@ -773,7 +885,17 @@ private class AndroidAsleepHostApi(
                         ?.takeIf(String::isNotEmpty)
                         ?.let { mapOf("sessionId" to it) }
                         ?: emptyMap(),
-                )
+                    shouldDeliver = ::isCurrentAttempt,
+                ) {
+                    startAttempt?.let {
+                        trackingStartCoordinator.fail(
+                            it,
+                            IllegalStateException(
+                                "Tracking closed before the native SDK acknowledged its start",
+                            ),
+                        )
+                    }
+                }
             }
 
             override fun onFail(errorCode: Int, detail: String) {
@@ -781,8 +903,14 @@ private class AndroidAsleepHostApi(
                 failedTerminally = hasTerminalTrackingFailure(failedTerminally, errorCode)
                 val code =
                     if (errorCode == 23499) "UPLOAD_TRACKING_TERMINATED" else "TRACKING_FAILED"
-                emit("onTrackingFailed", errorPayload(errorCode, detail, code))
-                startAttempt?.let { trackingStartCoordinator.fail(it, nativeSdkError(errorCode, detail)) }
+                val failure = nativeSdkError(errorCode, detail)
+                emit(
+                    "onTrackingFailed",
+                    errorPayload(errorCode, detail, code),
+                    shouldDeliver = ::isCurrentAttempt,
+                ) {
+                    startAttempt?.let { trackingStartCoordinator.fail(it, failure) }
+                }
             }
         }
 
@@ -797,6 +925,8 @@ private class AndroidAsleepHostApi(
         ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
     private fun finishConfigure(result: Result<Unit>) {
+        configureTimeout?.let(mainHandler::removeCallbacks)
+        configureTimeout = null
         configureCallback?.invoke(result)
         configureCallback = null
         configureInFlight = false
@@ -815,6 +945,7 @@ private class AndroidAsleepHostApi(
                 asleepLogger = nativeLogger,
                 asleepConfigListener = object : Asleep.AsleepConfigListener {
                     override fun onSuccess(userId: String?, asleepConfig: AsleepConfig?) {
+                        if (setupCallback == null) return
                         if (asleepConfig == null) {
                             val error = IllegalStateException("Native AsleepConfig is null after setup")
                             emit(
@@ -837,6 +968,7 @@ private class AndroidAsleepHostApi(
                     }
 
                     override fun onFail(errorCode: Int, detail: String) {
+                        if (setupCallback == null) return
                         val payload = errorPayload(errorCode, detail, "INIT_CONFIG_FAILED")
                         emit("onUserJoinFailed", payload)
                         emit("onSetupDidFail", payload)
@@ -857,6 +989,8 @@ private class AndroidAsleepHostApi(
     }
 
     private fun finishSetup(result: Result<Unit>) {
+        setupTimeout?.let(mainHandler::removeCallbacks)
+        setupTimeout = null
         setupCallback?.invoke(result)
         setupCallback = null
         setupInFlight = false
@@ -893,8 +1027,13 @@ private class AndroidAsleepHostApi(
         }
     }
 
-    private fun emit(type: String, payload: Map<String, Any?> = emptyMap()) {
-        events.emit(type, gson.toJson(payload))
+    private fun emit(
+        type: String,
+        payload: Map<String, Any?> = emptyMap(),
+        shouldDeliver: () -> Boolean = { true },
+        completion: (() -> Unit)? = null,
+    ) {
+        events.emit(type, gson.toJson(payload), shouldDeliver, completion)
     }
 
     private fun emitJson(type: String, payloadJson: String) {

@@ -10,7 +10,7 @@ Verified on: 2026-07-30
 | Dart SDK | `^3.12.2` | Experimental floor matching the verified toolchain; broader consumer-fleet validation remains |
 | Flutter | `>=3.44.0` | Experimental floor matching Dart 3.12.2; broader consumer-fleet validation remains |
 | Android | API 24, pinned `ai.asleep:asleepsdk:3.2.1` | Kotlin compile, lint, merged-manifest policy, and 16 Android bridge tests pass on the current implementation |
-| iOS | iOS 15, pinned `AsleepSDK` 3.2.0, CocoaPods-only | Current pod lint and unsigned release device build pass locally; clean release-CI verification remains |
+| iOS | iOS 15, pinned `AsleepSDK` 3.2.0, CocoaPods-only | Existing commercial runtime baseline; wrapper pod lint and unsigned release build pass, with a native privacy-manifest follow-up |
 | Source distribution | Private GitHub repository, public pub.dev archive | `.pubignore` excludes internal `doc/` and Pigeon schema files from the archive |
 | License | Proprietary notice copied from the RN 1.2 package | Release owner approved applying the existing Asleep notice to this Flutter archive on 2026-07-30 |
 
@@ -179,7 +179,7 @@ A public package must not be published until all of the following are resolved:
 
 1. Product approval for public source distribution and external use of both
    native SDK dependency paths.
-2. Recheck Android 3.2.1 and iOS 3.2.0 artifact access from clean release-CI
+2. Recheck Android 3.2.1 and iOS 3.2.0 from clean release-CI
    runners without developer-local credentials.
 3. Confirm public support, issue, security, and source links.
 4. Inspect the final `.pubignore` archive and run the package, credential, and

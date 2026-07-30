@@ -59,6 +59,12 @@ await asleep.initialize(
 final restore = await asleep.checkAndRestoreTracking();
 final battery = await asleep.checkBatteryOptimization();
 
+if (!battery.exempted) {
+  // Call from an app-controlled user interaction, then recheck after return.
+  await asleep.requestBatteryOptimizationExemption();
+  return;
+}
+
 if (!await asleep.hasRequiredPermissions()) {
   // Call from an app-controlled user interaction.
   final granted = await asleep.requestRequiredPermissions();
@@ -139,6 +145,12 @@ supported runtime target.
 The native AsleepSDK 3.2.0 release is currently distributed through CocoaPods,
 so this plugin cannot yet provide a complete Swift Package Manager dependency
 chain.
+
+The pinned AsleepSDK 3.2.0 CocoaPods artifact does not contain a privacy
+manifest. This does not prevent pub.dev publication or the existing native SDK
+from running, but applications remain responsible for App Store privacy
+compliance. A future native SDK release should bundle its required-reason API
+declarations directly.
 
 ## State and event semantics
 

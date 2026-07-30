@@ -174,10 +174,12 @@ class AsleepError {
       case 'NETWORK_OFFLINE':
         return AsleepErrorCategory.transient;
       default:
-        if (_terminalNumericCodes.contains(numericCode)) {
+        if (code == 'TRACKING_FAILED' &&
+            _terminalNumericCodes.contains(numericCode)) {
           return AsleepErrorCategory.terminal;
         }
-        if (_transientNumericCodes.contains(numericCode)) {
+        if (code == 'TRACKING_FAILED' &&
+            _transientNumericCodes.contains(numericCode)) {
           return AsleepErrorCategory.transient;
         }
         return AsleepErrorCategory.unknown;
@@ -311,17 +313,43 @@ class AsleepStat {
 
   final Map<String, Object?> values;
 
+  List<String>? get sleepCycleTime => _stringList(values, 'sleepCycleTime');
+  int? get timeInStableBreath => _int(values, 'timeInStableBreath');
   int? get timeInBed => _int(values, 'timeInBed');
+  double? get unstableBreathRatio => _double(values, 'unstableBreathRatio');
+  int? get sleepCycle => _int(values, 'sleepCycle');
   int? get timeInSleep => _int(values, 'timeInSleep');
+  int? get deepLatency => _int(values, 'deepLatency');
+  int? get remLatency => _int(values, 'remLatency');
+  int? get timeInSnoring => _int(values, 'timeInSnoring');
+  String? get wakeTime => _string(values, 'wakeTime');
+  double? get lightRatio => _double(values, 'lightRatio');
+  double? get noSnoringRatio => _double(values, 'noSnoringRatio');
+  int? get snoringCount => _int(values, 'snoringCount');
+  int? get unstableBreathCount => _int(values, 'unstableBreathCount');
   int? get timeInWake => _int(values, 'timeInWake');
+  String? get sleepTime => _string(values, 'sleepTime');
+  int? get sleepCycleCount => _int(values, 'sleepCycleCount');
   int? get timeInRem => _int(values, 'timeInRem');
   int? get timeInLight => _int(values, 'timeInLight');
   int? get timeInDeep => _int(values, 'timeInDeep');
   int? get sleepLatency => _int(values, 'sleepLatency');
   int? get wakeupLatency => _int(values, 'wakeupLatency');
+  String? get breathingPattern => _string(values, 'breathingPattern');
+  double? get snoringRatio => _double(values, 'snoringRatio');
+  double? get stableBreathRatio => _double(values, 'stableBreathRatio');
+  int? get timeInSleepPeriod => _int(values, 'timeInSleepPeriod');
+  int? get lightLatency => _int(values, 'lightLatency');
+  double? get remRatio => _double(values, 'remRatio');
   int? get wasoCount => _int(values, 'wasoCount');
   int? get longestWaso => _int(values, 'longestWaso');
   double? get sleepEfficiency => _double(values, 'sleepEfficiency');
+  int? get timeInNoSnoring => _int(values, 'timeInNoSnoring');
+  int? get sleepIndex => _int(values, 'sleepIndex');
+  double? get sleepRatio => _double(values, 'sleepRatio');
+  int? get timeInUnstableBreath => _int(values, 'timeInUnstableBreath');
+  double? get wakeRatio => _double(values, 'wakeRatio');
+  double? get deepRatio => _double(values, 'deepRatio');
   double? get breathingIndex => _double(values, 'breathingIndex');
 }
 
@@ -437,7 +465,15 @@ class AsleepSleptSession {
     required this.id,
     required this.startTime,
     required this.endTime,
+    required this.completedTime,
     required this.createdTimezone,
+    required this.sleepEfficiency,
+    required this.timeInWake,
+    required this.timeInSleepPeriod,
+    required this.timeInSleep,
+    required this.timeInBed,
+    required this.wakeRatio,
+    required this.sleepRatio,
     required this.stats,
     required this.raw,
   });
@@ -448,7 +484,15 @@ class AsleepSleptSession {
       id: _requiredNonEmptyString(json, 'id'),
       startTime: _requiredDate(json, 'startTime'),
       endTime: _requiredDate(json, 'endTime'),
+      completedTime: _requiredDate(json, 'completedTime'),
       createdTimezone: _requiredString(json, 'createdTimezone'),
+      sleepEfficiency: _requiredDouble(json, 'sleepEfficiency'),
+      timeInWake: _requiredInt(json, 'timeInWake'),
+      timeInSleepPeriod: _requiredInt(json, 'timeInSleepPeriod'),
+      timeInSleep: _requiredInt(json, 'timeInSleep'),
+      timeInBed: _requiredInt(json, 'timeInBed'),
+      wakeRatio: _requiredDouble(json, 'wakeRatio'),
+      sleepRatio: _requiredDouble(json, 'sleepRatio'),
       stats: AsleepStat.fromJson(json),
       raw: json,
     );
@@ -457,7 +501,15 @@ class AsleepSleptSession {
   final String id;
   final DateTime startTime;
   final DateTime endTime;
+  final DateTime completedTime;
   final String createdTimezone;
+  final double sleepEfficiency;
+  final int timeInWake;
+  final int timeInSleepPeriod;
+  final int timeInSleep;
+  final int timeInBed;
+  final double wakeRatio;
+  final double sleepRatio;
   final AsleepStat stats;
   final Map<String, Object?> raw;
 }
@@ -468,7 +520,7 @@ class AsleepNeverSleptSession {
     required this.id,
     required this.startTime,
     required this.endTime,
-    this.completedTime,
+    required this.completedTime,
     required this.raw,
   });
 
@@ -478,7 +530,7 @@ class AsleepNeverSleptSession {
       id: _requiredNonEmptyString(json, 'id'),
       startTime: _requiredDate(json, 'startTime'),
       endTime: _requiredDate(json, 'endTime'),
-      completedTime: _date(json, 'completedTime'),
+      completedTime: _requiredDate(json, 'completedTime'),
       raw: json,
     );
   }
@@ -486,7 +538,7 @@ class AsleepNeverSleptSession {
   final String id;
   final DateTime startTime;
   final DateTime endTime;
-  final DateTime? completedTime;
+  final DateTime completedTime;
   final Map<String, Object?> raw;
 }
 
@@ -688,6 +740,13 @@ int? _int(Map<String, Object?> json, String key) {
   throw _malformed('Field "$key" must be an integer.');
 }
 
+int _requiredInt(Map<String, Object?> json, String key) =>
+    _int(json, key) ??
+    (throw AsleepException(
+      AsleepErrorCode.malformedPayload,
+      'Missing integer field "$key".',
+    ));
+
 double? _double(Map<String, Object?> json, String key) {
   final value = json[key];
   if (value == null) {
@@ -724,6 +783,7 @@ DateTime _requiredDate(Map<String, Object?> json, String key) =>
       AsleepErrorCode.malformedPayload,
       'Missing date field "$key".',
     ));
+
 Map<String, Object?>? _map(Map<String, Object?> json, String key) {
   final value = json[key];
   if (value == null) {

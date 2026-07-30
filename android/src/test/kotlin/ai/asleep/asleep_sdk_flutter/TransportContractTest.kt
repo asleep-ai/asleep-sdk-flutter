@@ -141,6 +141,7 @@ internal class TransportContractTest {
     fun trackingStartTimesOutWhenNativeSdkNeverAcknowledges() {
         var timeout: Runnable? = null
         var result: Result<Unit>? = null
+        var timeoutRecoveryCount = 0
         val coordinator =
             TrackingStartCoordinator(
                 schedule = { runnable, delay ->
@@ -148,15 +149,19 @@ internal class TransportContractTest {
                     timeout = runnable
                 },
                 cancel = {},
+                onTimeout = { timeoutRecoveryCount += 1 },
             )
 
-        assertNotNull(coordinator.begin { result = it })
+        val attempt = assertNotNull(coordinator.begin { result = it })
         assertNull(result)
         assertNotNull(timeout).run()
 
         val error = assertNotNull(result).exceptionOrNull() as FlutterError
         assertEquals("TRACKING_START_TIMEOUT", error.code)
+        assertEquals(1, timeoutRecoveryCount)
         assertFalse(coordinator.isInFlight)
+        assertFalse(coordinator.isLatest(attempt))
+        assertFalse(coordinator.succeed(attempt))
     }
 
     @Test

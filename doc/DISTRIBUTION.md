@@ -11,9 +11,14 @@ and its included source files. The experimental 0.1.0 candidate is publishable,
 and the release owner confirmed on 2026-07-30 that the existing Asleep
 proprietary notice applies to the Flutter archive. No upload is authorized
 until the release owner approves the exact archive. `.pubignore` excludes
-internal `doc/` and Pigeon
-schema files; Dart, Kotlin, Swift, generated transport, and example sources
-remain public archive contents.
+internal `doc/` and Pigeon schema files; Dart, Kotlin, Swift, generated
+transport, and example sources remain public archive contents.
+
+The pinned AsleepSDK 3.2.0 CocoaPods artifact is the existing commercial
+runtime baseline. It does not contain a privacy manifest. That is an App Store
+compliance follow-up for the native SDK, not a technical blocker for publishing
+this source-only Flutter package. The missing upstream license file is a
+CocoaPods lint warning; the native binary is not included in the pub archive.
 
 On 2026-07-30, the pub.dev API endpoint for
 `asleep_sdk_flutter` returned HTTP 404. This is evidence that no public package

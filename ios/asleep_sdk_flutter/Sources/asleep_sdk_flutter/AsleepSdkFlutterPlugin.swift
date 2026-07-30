@@ -113,6 +113,8 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
   private var trackingActive = false
   private var trackingStartCompletion: ((Result<Void, Error>) -> Void)?
   private var trackingStartTimeout: DispatchWorkItem?
+  private var nextTrackingStartGeneration: UInt64 = 0
+  private var activeTrackingStartGeneration: UInt64?
   private var detached = false
 
   init(events: IosEventsStreamHandler) {
@@ -257,8 +259,16 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
       }
     }
     trackingStartCompletion = completion
+    nextTrackingStartGeneration &+= 1
+    let generation = nextTrackingStartGeneration
+    activeTrackingStartGeneration = generation
     let timeout = DispatchWorkItem { [weak self] in
-      self?.finishTrackingStart(.failure(BridgeError.trackingStartTimeout))
+      guard self?.activeTrackingStartGeneration == generation else { return }
+      self?.finishTrackingStart(
+        .failure(BridgeError.trackingStartTimeout),
+        generation: generation
+      )
+      self?.trackingManager?.stopTracking()
     }
     trackingStartTimeout = timeout
     DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: timeout)
@@ -427,6 +437,7 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
     reportManager = nil
     config = nil
     trackingActive = false
+    initializationInFlight = false
     releaseNativeSdkIfIdle()
   }
 
@@ -438,6 +449,17 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
   }
 
   private func finishTrackingStart(_ result: Result<Void, Error>) {
+    finishTrackingStart(result, generation: nil)
+  }
+
+  private func finishTrackingStart(
+    _ result: Result<Void, Error>,
+    generation: UInt64?
+  ) {
+    if let generation, activeTrackingStartGeneration != generation {
+      return
+    }
+    activeTrackingStartGeneration = nil
     guard let completion = trackingStartCompletion else { return }
     trackingStartCompletion = nil
     trackingStartTimeout?.cancel()
@@ -547,6 +569,7 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
 
 extension IosAsleepHostApi: AsleepSetupDelegate {
   func setupDidComplete() {
+    guard !detached else { return }
     guard
       let message = setupMessage,
       let completion = setupCompletion
@@ -573,6 +596,7 @@ extension IosAsleepHostApi: AsleepSetupDelegate {
   }
 
   func setupDidFail(error: Asleep.AsleepError) {
+    guard !detached else { return }
     emit("onSetupDidFail", errorPayload(error, fallbackCode: "SETUP_FAILED"))
     setupCompletion?(.failure(transportError(error)))
     setupCompletion = nil
@@ -584,12 +608,14 @@ extension IosAsleepHostApi: AsleepSetupDelegate {
   }
 
   func setupInProgress(progress: Int) {
+    guard !detached else { return }
     emit("onSetupInProgress", ["progress": progress])
   }
 }
 
 extension IosAsleepHostApi: AsleepConfigDelegate {
   func userDidJoin(userId: String, config: Asleep.Config) {
+    guard !detached else { return }
     self.config = config
     trackingManager = Asleep.createSleepTrackingManager(config: config, delegate: self)
     reportManager = Asleep.createReports(config: config)
@@ -602,6 +628,7 @@ extension IosAsleepHostApi: AsleepConfigDelegate {
   }
 
   func didFailUserJoin(error: Asleep.AsleepError) {
+    guard !detached else { return }
     emit(
       "onUserJoinFailed",
       errorPayload(error, fallbackCode: "INITIALIZATION_FAILED")
@@ -614,29 +641,39 @@ extension IosAsleepHostApi: AsleepConfigDelegate {
   }
 
   func userDidDelete(userId: String) {
+    guard !detached else { return }
     emit("onUserDeleted", ["userId": userId])
   }
 }
 
 extension IosAsleepHostApi: AsleepSleepTrackingManagerDelegate {
   func didCreate() {
+    guard !detached else { return }
+    guard let generation = activeTrackingStartGeneration else {
+      trackingManager?.stopTracking()
+      return
+    }
     trackingActive = true
-    resolveSessionId(retriesRemaining: 5) { [weak self] in
-      self?.finishTrackingStart(.success(()))
+    resolveSessionId(retriesRemaining: 5, generation: generation) { [weak self] in
+      self?.finishTrackingStart(.success(()), generation: generation)
     }
   }
 
   func didUpload(sequence: Int) {
+    guard !detached else { return }
     emit("onTrackingUploaded", ["sequence": sequence])
   }
 
   func didClose(sessionId: String) {
+    guard !detached else { return }
     trackingActive = false
     finishTrackingStart(.failure(BridgeError.trackingClosedBeforeStart))
     emit("onTrackingClosed", ["sessionId": sessionId])
   }
 
   func didFail(error: Asleep.AsleepError) {
+    guard !detached else { return }
+    activeTrackingStartGeneration = nil
     switch error {
     case .uploadTrackingTerminated, .interruptionRecoveryFailed:
       trackingActive = false
@@ -652,20 +689,25 @@ extension IosAsleepHostApi: AsleepSleepTrackingManagerDelegate {
   }
 
   func didInterrupt() {
+    guard !detached else { return }
     emit("onTrackingInterrupted")
   }
 
   func didResume() {
+    guard !detached else { return }
     emit("onTrackingResumed")
   }
 
   func micPermissionWasDenied() {
+    guard !detached else { return }
+    activeTrackingStartGeneration = nil
     emit("onMicPermissionDenied") { [weak self] in
       self?.finishTrackingStart(.failure(BridgeError.microphonePermissionDenied))
     }
   }
 
   func analysing(session: Asleep.Model.Session) {
+    guard !detached else { return }
     do {
       emitJSON("onAnalysisResult", try encodeJSON(session))
     } catch {
@@ -675,8 +717,15 @@ extension IosAsleepHostApi: AsleepSleepTrackingManagerDelegate {
 
   private func resolveSessionId(
     retriesRemaining: Int,
+    generation: UInt64,
     completion: @escaping () -> Void
   ) {
+    guard
+      activeTrackingStartGeneration == generation,
+      trackingActive
+    else {
+      return
+    }
     if let sessionId = trackingManager?.getTrackingStatus().sessionId {
       emit("onTrackingCreated", ["sessionId": sessionId], completion: completion)
       return
@@ -688,6 +737,7 @@ extension IosAsleepHostApi: AsleepSleepTrackingManagerDelegate {
     DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
       self?.resolveSessionId(
         retriesRemaining: retriesRemaining - 1,
+        generation: generation,
         completion: completion
       )
     }

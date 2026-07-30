@@ -47,11 +47,16 @@ class AsleepClient {
   bool _onDeviceAnalysisEnabled = false;
   bool _initializationInFlight = false;
   bool _trackingStatusChecked = false;
+  bool _preflightRestoreDetected = false;
+  bool _preflightConfigureAllowed = false;
   bool _recordingDeadSession = false;
+  int _nextStartAttempt = 0;
+  int? _activeStartAttempt;
   bool _startPending = false;
   bool _stopPending = false;
   bool _resumePending = false;
   bool _disposed = false;
+  Future<void>? _disposeFuture;
 
   /// The most recently reduced SDK state.
   AsleepSnapshot get state => _state;
@@ -66,9 +71,19 @@ class AsleepClient {
   Future<void> initialize(AsleepSetupOptions options) async {
     _ensureOpen();
     _ensureInitializationAvailable();
+    if (_state.isTracking ||
+        _recordingDeadSession ||
+        _hasPendingLifecycleCommand) {
+      throw const AsleepException(
+        AsleepErrorCode.invalidState,
+        'Cannot initialize while a tracking session is active.',
+      );
+    }
     _validateRequiredString(options.apiKey, 'apiKey');
     _validateOptionalUrl(options.baseUrl, 'baseUrl');
     _validateOptionalUrl(options.callbackUrl, 'callbackUrl');
+    _validateOptionalNonEmptyString(options.service, 'service');
+    final errorBefore = _state.error;
     _initializationInFlight = true;
     _initialized = false;
     _attachEvents();
@@ -77,6 +92,14 @@ class AsleepClient {
     );
     try {
       await _restorePreflight();
+      if (_state.isTracking) {
+        _preflightConfigureAllowed = true;
+        throw const AsleepException(
+          AsleepErrorCode.invalidState,
+          'Cannot initialize while a tracking session is active. '
+          'Call configure() to reconnect it or stopTracking() first.',
+        );
+      }
       await _platform.setup(options);
       _onDeviceAnalysisEnabled = options.enableOnDeviceAnalysis;
       _initialized = true;
@@ -89,7 +112,7 @@ class AsleepClient {
       _setState(
         _state.copyWith(
           setupStatus: SetupStatus.idle,
-          error: _asleepError(error),
+          error: _errorAfterFailure(errorBefore, error),
         ),
       );
       rethrow;
@@ -102,10 +125,20 @@ class AsleepClient {
   Future<void> configure(AsleepConfiguration configuration) async {
     _ensureOpen();
     _ensureInitializationAvailable();
+    if ((_state.isTracking && !_preflightConfigureAllowed) ||
+        _recordingDeadSession ||
+        _hasPendingLifecycleCommand) {
+      throw const AsleepException(
+        AsleepErrorCode.invalidState,
+        'Cannot configure while a tracking session is active.',
+      );
+    }
     _validateRequiredString(configuration.apiKey, 'apiKey');
     _validateOptionalNonEmptyString(configuration.userId, 'userId');
     _validateOptionalUrl(configuration.baseUrl, 'baseUrl');
     _validateOptionalUrl(configuration.callbackUrl, 'callbackUrl');
+    _preflightConfigureAllowed = false;
+    final errorBefore = _state.error;
     _initializationInFlight = true;
     _initialized = false;
     _attachEvents();
@@ -121,10 +154,12 @@ class AsleepClient {
       );
     } catch (error) {
       _initialized = false;
+      _preflightConfigureAllowed =
+          _preflightRestoreDetected && _state.isTracking;
       _setState(
         _state.copyWith(
           setupStatus: SetupStatus.idle,
-          error: _asleepError(error),
+          error: _errorAfterFailure(errorBefore, error),
         ),
       );
       rethrow;
@@ -136,7 +171,16 @@ class AsleepClient {
   /// Checks for a native tracking session that can be restored.
   Future<RestoreResult> checkAndRestoreTracking() async {
     _ensureReady();
+    if (_hasPendingLifecycleCommand) {
+      throw const AsleepException(
+        AsleepErrorCode.invalidState,
+        'Cannot restore tracking while a lifecycle command is in progress.',
+      );
+    }
     final result = await _platform.checkAndRestoreTracking();
+    final stalePreflight = _preflightRestoreDetected;
+    _preflightRestoreDetected = false;
+    _preflightConfigureAllowed = false;
     _trackingStatusChecked = true;
     if (result.hasActiveSession) {
       _recordingDeadSession = false;
@@ -146,7 +190,8 @@ class AsleepClient {
           didClose: false,
         ),
       );
-    } else if (_state.trackingStatus == TrackingStatus.tracking) {
+    } else if (stalePreflight &&
+        _state.trackingStatus == TrackingStatus.tracking) {
       _setState(
         _state.copyWith(
           trackingStatus: TrackingStatus.idle,
@@ -218,6 +263,8 @@ class AsleepClient {
         'A tracking lifecycle command is already in progress.',
       );
     }
+    final startAttempt = ++_nextStartAttempt;
+    _activeStartAttempt = startAttempt;
     _startPending = true;
     try {
       if (!await _platform.hasRequiredPermissions()) {
@@ -226,9 +273,38 @@ class AsleepClient {
           'Required microphone permissions have not been granted.',
         );
       }
+      _ensureStartAttemptActive(startAttempt);
+      final batteryStatus = await _platform.checkBatteryOptimization();
+      _ensureStartAttemptActive(startAttempt);
+      if (!batteryStatus.exempted) {
+        throw const AsleepException(
+          AsleepErrorCode.invalidState,
+          'Battery optimization exemption is required before tracking. '
+          'Call requestBatteryOptimizationExemption() and check again.',
+        );
+      }
       await _platform.startTracking(options);
-    } catch (_) {
+      _ensureStartAttemptActive(startAttempt);
+      _activeStartAttempt = null;
       _startPending = false;
+      if (_state.trackingStatus == TrackingStatus.idle) {
+        _setState(
+          _state.copyWith(
+            trackingStatus: TrackingStatus.tracking,
+            didClose: false,
+            clearError: true,
+          ),
+        );
+      }
+    } catch (error) {
+      if (_activeStartAttempt == startAttempt) {
+        _activeStartAttempt = null;
+        _startPending = false;
+        if (error is AsleepException &&
+            error.nativeCode == 'TRACKING_START_TIMEOUT') {
+          _trackingStatusChecked = false;
+        }
+      }
       rethrow;
     }
   }
@@ -261,21 +337,35 @@ class AsleepClient {
   /// Stops the active tracking session.
   Future<void> stopTracking() async {
     _ensureOpen();
-    if (!_state.isTracking && !_recordingDeadSession) {
+    final cancellingPendingStart =
+        _activeStartAttempt != null &&
+        _state.trackingStatus == TrackingStatus.idle;
+    if (!_state.isTracking &&
+        !_recordingDeadSession &&
+        _activeStartAttempt == null &&
+        !_resumePending) {
       throw const AsleepException(
         AsleepErrorCode.invalidState,
         'No tracking session is active.',
       );
     }
-    if (_hasPendingLifecycleCommand) {
+    if (_stopPending) {
       throw const AsleepException(
         AsleepErrorCode.invalidState,
-        'A tracking lifecycle command is already in progress.',
+        'A stopTracking command is already in progress.',
       );
     }
+    _activeStartAttempt = null;
+    _startPending = false;
     _stopPending = true;
     try {
       await _platform.stopTracking();
+      if (cancellingPendingStart &&
+          _state.trackingStatus == TrackingStatus.idle) {
+        _clearPendingLifecycleCommands();
+        _trackingStatusChecked = false;
+        _recordingDeadSession = false;
+      }
     } catch (_) {
       _stopPending = false;
       rethrow;
@@ -285,6 +375,12 @@ class AsleepClient {
   /// Requests an analysis update for the active session.
   Future<AnalysisRequest> requestAnalysis() async {
     _ensureReady();
+    if (_stopPending) {
+      throw const AsleepException(
+        AsleepErrorCode.invalidState,
+        'Cannot request analysis while tracking is stopping.',
+      );
+    }
     if (_state.trackingStatus != TrackingStatus.tracking) {
       throw const AsleepException(
         AsleepErrorCode.invalidState,
@@ -351,10 +447,9 @@ class AsleepClient {
   }
 
   /// Releases native resources and closes the client's streams.
-  Future<void> dispose() async {
-    if (_disposed) {
-      return;
-    }
+  Future<void> dispose() => _disposeFuture ??= _dispose();
+
+  Future<void> _dispose() async {
     _disposed = true;
     Object? firstError;
     StackTrace? firstStackTrace;
@@ -389,8 +484,8 @@ class AsleepClient {
       _handleEvent,
       onError: (Object error, StackTrace stackTrace) {
         final mapped = _asleepError(error);
-        _events.addError(error, stackTrace);
         _setState(_state.copyWith(error: mapped));
+        _events.addError(error, stackTrace);
       },
     );
   }
@@ -399,10 +494,11 @@ class AsleepClient {
     if (_disposed) {
       return;
     }
-    _events.add(event);
     switch (event) {
       case TrackingCreatedEvent():
         final sessionId = _nonEmpty(event.sessionId);
+        _preflightRestoreDetected = false;
+        _preflightConfigureAllowed = false;
         _startPending = false;
         _recordingDeadSession = false;
         _setState(
@@ -415,6 +511,8 @@ class AsleepClient {
           ),
         );
       case TrackingUploadedEvent():
+        _preflightRestoreDetected = false;
+        _preflightConfigureAllowed = false;
         final wasRecovering =
             _state.trackingStatus == TrackingStatus.recoveryRequired;
         _startPending = false;
@@ -428,12 +526,15 @@ class AsleepClient {
           );
         }
         if (_state.trackingStatus == TrackingStatus.tracking &&
+            !_stopPending &&
             (_onDeviceAnalysisEnabled ||
                 (event.sequence >= 10 && event.sequence % 10 == 1))) {
           unawaited(_requestAnalysisFromUpload());
         }
       case TrackingClosedEvent():
         final sessionId = _nonEmpty(event.sessionId);
+        _preflightRestoreDetected = false;
+        _preflightConfigureAllowed = false;
         _clearPendingLifecycleCommands();
         _recordingDeadSession = false;
         _setState(
@@ -451,6 +552,8 @@ class AsleepClient {
             category == AsleepErrorCategory.terminal ||
             category == AsleepErrorCategory.recordingDead;
         if (ended) {
+          _preflightRestoreDetected = false;
+          _preflightConfigureAllowed = false;
           _clearPendingLifecycleCommands();
         } else if (category == AsleepErrorCategory.recoveryRequired) {
           _resumePending = false;
@@ -523,18 +626,33 @@ class AsleepClient {
       case UnknownNativeEvent():
         break;
     }
+    _events.add(event);
   }
 
   void _setState(AsleepSnapshot value) {
     if (_disposed) {
       return;
     }
+    if (_sameSnapshot(_state, value)) {
+      return;
+    }
     _state = value;
     _states.add(value);
   }
 
+  bool _sameSnapshot(AsleepSnapshot left, AsleepSnapshot right) =>
+      left.setupStatus == right.setupStatus &&
+      left.trackingStatus == right.trackingStatus &&
+      left.userId == right.userId &&
+      left.sessionId == right.sessionId &&
+      identical(left.analysisResult, right.analysisResult) &&
+      left.isAnalyzing == right.isAnalyzing &&
+      identical(left.error, right.error) &&
+      left.didClose == right.didClose &&
+      left.batteryOptimizationChecked == right.batteryOptimizationChecked;
+
   Future<void> _requestAnalysisFromUpload() async {
-    if (_disposed || !_initialized || _state.isAnalyzing) {
+    if (_disposed || !_initialized || _stopPending || _state.isAnalyzing) {
       return;
     }
     try {
@@ -549,10 +667,23 @@ class AsleepClient {
   }
 
   Future<void> _restorePreflight() async {
+    final stalePreflight = _preflightRestoreDetected;
     final result = await _platform.checkAndRestoreTracking();
     if (!result.hasActiveSession) {
+      if (stalePreflight &&
+          _preflightRestoreDetected &&
+          _state.trackingStatus == TrackingStatus.tracking) {
+        _setState(
+          _state.copyWith(
+            trackingStatus: TrackingStatus.idle,
+            clearSessionId: true,
+          ),
+        );
+      }
+      _preflightRestoreDetected = false;
       return;
     }
+    _preflightRestoreDetected = true;
     _recordingDeadSession = false;
     _setState(
       _state.copyWith(trackingStatus: TrackingStatus.tracking, didClose: false),
@@ -560,12 +691,24 @@ class AsleepClient {
   }
 
   bool get _hasPendingLifecycleCommand =>
-      _startPending || _stopPending || _resumePending;
+      _activeStartAttempt != null ||
+      _startPending ||
+      _stopPending ||
+      _resumePending;
 
   void _clearPendingLifecycleCommands() {
     _startPending = false;
     _stopPending = false;
     _resumePending = false;
+  }
+
+  void _ensureStartAttemptActive(int attempt) {
+    if (_activeStartAttempt != attempt || _disposed) {
+      throw const AsleepException(
+        AsleepErrorCode.invalidState,
+        'The startTracking command was cancelled.',
+      );
+    }
   }
 
   void _ensureInitializationAvailable() {
@@ -656,5 +799,16 @@ class AsleepClient {
       message: error.toString(),
       platformDetails: <String, Object?>{'cause': error},
     );
+  }
+
+  AsleepError _errorAfterFailure(
+    AsleepError? errorBefore,
+    Object commandError,
+  ) {
+    final eventError = _state.error;
+    if (eventError != null && !identical(eventError, errorBefore)) {
+      return eventError;
+    }
+    return _asleepError(commandError);
   }
 }

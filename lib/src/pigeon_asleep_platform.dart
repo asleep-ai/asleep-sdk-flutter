@@ -117,9 +117,14 @@ class PigeonAsleepPlatform extends AsleepPlatform {
     final result = await _hostApi.requestAnalysis().asAsleepFuture();
     final immediateJson = result.resultJson;
     return AnalysisRequest(
-      status: result.status == 'completed'
-          ? AnalysisRequestStatus.completed
-          : AnalysisRequestStatus.requested,
+      status: switch (result.status) {
+        'requested' => AnalysisRequestStatus.requested,
+        'completed' => AnalysisRequestStatus.completed,
+        final status => throw AsleepException(
+          AsleepErrorCode.malformedPayload,
+          'Unknown native analysis request status "$status".',
+        ),
+      },
       timestamp: result.timestampMilliseconds == null
           ? null
           : DateTime.fromMillisecondsSinceEpoch(

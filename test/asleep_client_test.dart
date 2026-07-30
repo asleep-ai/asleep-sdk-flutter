@@ -7,14 +7,22 @@ void main() {
   group('AsleepClient', () {
     late FakeAsleepPlatform platform;
     late AsleepClient client;
+    late bool disposeFailureExpected;
 
     setUp(() {
       platform = FakeAsleepPlatform();
       client = AsleepClient(platform: platform);
+      disposeFailureExpected = false;
     });
 
     tearDown(() async {
-      await client.dispose();
+      try {
+        await client.dispose();
+      } catch (_) {
+        if (!disposeFailureExpected) {
+          rethrow;
+        }
+      }
       await platform.close();
     });
 
@@ -44,6 +52,21 @@ void main() {
       await subscription.cancel();
     });
 
+    test('reduces state before publishing each native event', () async {
+      await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
+      TrackingStatus? statusSeenByEventListener;
+      final subscription = client.events
+          .where((event) => event is TrackingCreatedEvent)
+          .listen((_) {
+            statusSeenByEventListener = client.state.trackingStatus;
+          });
+
+      platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
+
+      expect(statusSeenByEventListener, TrackingStatus.tracking);
+      await subscription.cancel();
+    });
+
     test('does not request permission when startTracking is called', () async {
       platform.hasPermissions = false;
       await prepareClient(client);
@@ -60,6 +83,18 @@ void main() {
       );
 
       expect(platform.permissionRequestCount, 0);
+      expect(platform.startCount, 0);
+    });
+
+    test('rejects start when battery optimization is not exempted', () async {
+      await prepareClient(client);
+      platform.batteryExempted = false;
+
+      await expectLater(
+        client.startTracking(),
+        throwsInvalidStateContaining('Battery optimization'),
+      );
+
       expect(platform.startCount, 0);
     });
 
@@ -87,8 +122,8 @@ void main() {
       'explicit restore check invalidates a stale preflight result',
       () async {
         platform.hasActiveSession = true;
-        await client.initialize(
-          const AsleepSetupOptions(apiKey: 'test-api-key'),
+        await client.configure(
+          const AsleepConfiguration(apiKey: 'test-api-key'),
         );
         expect(client.state.trackingStatus, TrackingStatus.tracking);
 
@@ -101,9 +136,20 @@ void main() {
       },
     );
 
+    test('restore check does not clear a live in-process session', () async {
+      await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
+      platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
+
+      final result = await client.checkAndRestoreTracking();
+
+      expect(result.hasActiveSession, isFalse);
+      expect(client.state.trackingStatus, TrackingStatus.tracking);
+      expect(client.state.sessionId, 'session-1');
+    });
+
     test('projects a restored native session into tracking state', () async {
       platform.hasActiveSession = true;
-      await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
+      await client.configure(const AsleepConfiguration(apiKey: 'test-api-key'));
 
       final result = await client.checkAndRestoreTracking();
 
@@ -131,6 +177,19 @@ void main() {
       expect(platform.startCount, 1);
     });
 
+    test(
+      'successful start is immediately stoppable before its event',
+      () async {
+        await prepareClient(client);
+
+        await client.startTracking();
+        await client.stopTracking();
+
+        expect(client.state.trackingStatus, TrackingStatus.tracking);
+        expect(platform.stopCount, 1);
+      },
+    );
+
     test('allows only one startTracking command in flight', () async {
       await prepareClient(client);
       platform.startCompleter = Completer<void>();
@@ -145,6 +204,21 @@ void main() {
 
       platform.startCompleter!.complete();
       await first;
+    });
+
+    test('rejects restore while a start command is pending', () async {
+      await prepareClient(client);
+      platform.startCompleter = Completer<void>();
+      final start = client.startTracking();
+      await pumpEventQueue();
+
+      await expectLater(
+        client.checkAndRestoreTracking(),
+        throwsInvalidStateContaining('lifecycle command'),
+      );
+
+      platform.startCompleter!.complete();
+      await start;
     });
 
     test('releases the start guard after native rejection', () async {
@@ -172,6 +246,48 @@ void main() {
 
       platform.stopCompleter!.complete();
       await first;
+    });
+
+    test('stopTracking can cancel a pending start', () async {
+      await prepareClient(client);
+      platform.startCompleter = Completer<void>();
+
+      final start = client.startTracking();
+      await pumpEventQueue();
+      final startFailure = expectLater(start, throwsStateError);
+
+      await client.stopTracking();
+      platform.startCompleter!.completeError(StateError('start cancelled'));
+
+      await startFailure;
+      expect(platform.stopCount, 1);
+
+      platform.startCompleter = null;
+      await expectLater(
+        client.startTracking(),
+        throwsInvalidStateContaining('checkAndRestoreTracking'),
+      );
+      await client.checkAndRestoreTracking();
+      await client.startTracking();
+      expect(platform.startCount, 2);
+    });
+
+    test('stopTracking cancels start before native start is invoked', () async {
+      await prepareClient(client);
+      platform.permissionCompleter = Completer<bool>();
+      final start = client.startTracking();
+      await pumpEventQueue();
+      final startFailure = expectLater(
+        start,
+        throwsInvalidStateContaining('cancelled'),
+      );
+
+      await client.stopTracking();
+      platform.permissionCompleter!.complete(true);
+
+      await startFailure;
+      expect(platform.startCount, 0);
+      expect(platform.stopCount, 1);
     });
 
     test('allows only one resumeTracking command in flight', () async {
@@ -268,6 +384,25 @@ void main() {
         expect(platform.analysisRequestCount, 0);
       },
     );
+
+    test('blocks manual and automatic analysis while stopping', () async {
+      await prepareClient(client);
+      platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
+      platform.stopCompleter = Completer<void>();
+      final stop = client.stopTracking();
+
+      await expectLater(
+        client.requestAnalysis(),
+        throwsInvalidStateContaining('stopping'),
+      );
+      platform.emit(const TrackingUploadedEvent(sequence: 11));
+      await pumpEventQueue();
+      expect(platform.analysisRequestCount, 0);
+      expect(client.state.error, isNull);
+
+      platform.stopCompleter!.complete();
+      await stop;
+    });
 
     test('configure preserves the ODA cadence selected at setup', () async {
       await client.initialize(
@@ -395,6 +530,36 @@ void main() {
       expect(client.state.setupStatus, SetupStatus.complete);
     });
 
+    test('suppresses duplicate setup-complete snapshots', () async {
+      platform.emitSetupCompletedBeforeReturn = true;
+      var completedSnapshots = 0;
+      final subscription = client.states.listen((state) {
+        if (state.setupStatus == SetupStatus.complete) {
+          completedSnapshots++;
+        }
+      });
+
+      await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
+
+      expect(completedSnapshots, 1);
+      await subscription.cancel();
+    });
+
+    test('rejects setup while tracking is active', () async {
+      await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
+      platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
+
+      await expectLater(
+        client.initialize(
+          const AsleepSetupOptions(apiKey: 'replacement-api-key'),
+        ),
+        throwsInvalidStateContaining('tracking'),
+      );
+
+      expect(platform.setupCount, 1);
+      expect(client.state.trackingStatus, TrackingStatus.tracking);
+    });
+
     test('failed reinitialize invalidates prior readiness', () async {
       await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
       platform.setupError = StateError('replacement setup failed');
@@ -413,19 +578,81 @@ void main() {
       );
     });
 
-    test('can stop a restored session after setup fails', () async {
+    test('setup rejection preserves a richer failure event', () async {
+      final nativeError = AsleepError(
+        code: 'SETUP_FAILED',
+        message: 'Native setup failed.',
+        numericCode: 22401,
+      );
       platform
-        ..hasActiveSession = true
-        ..setupError = StateError('setup failed after restore');
+        ..setupFailureEvent = nativeError
+        ..setupError = StateError('generic host rejection');
 
       await expectLater(
         client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key')),
         throwsStateError,
       );
+
+      expect(client.state.error, same(nativeError));
+    });
+
+    test('blocks setup but can stop a restored session', () async {
+      platform.hasActiveSession = true;
+
+      await expectLater(
+        client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key')),
+        throwsInvalidStateContaining('configure'),
+      );
       expect(client.state.trackingStatus, TrackingStatus.tracking);
+      expect(platform.setupCount, 0);
 
       await client.stopTracking();
       expect(platform.stopCount, 1);
+    });
+
+    test('configures a session found by initialize preflight', () async {
+      platform.hasActiveSession = true;
+      await expectLater(
+        client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key')),
+        throwsInvalidStateContaining('configure'),
+      );
+
+      await client.configure(const AsleepConfiguration(apiKey: 'test-api-key'));
+
+      expect(client.state.setupStatus, SetupStatus.complete);
+      expect(client.state.trackingStatus, TrackingStatus.tracking);
+      expect(platform.configureCount, 1);
+    });
+
+    test('does not allow repeated configure on a restored session', () async {
+      platform.hasActiveSession = true;
+      await expectLater(
+        client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key')),
+        throwsInvalidStateContaining('configure'),
+      );
+      await client.configure(const AsleepConfiguration(apiKey: 'test-api-key'));
+
+      await expectLater(
+        client.configure(
+          const AsleepConfiguration(apiKey: 'replacement-api-key'),
+        ),
+        throwsInvalidStateContaining('tracking'),
+      );
+      expect(platform.configureCount, 1);
+    });
+
+    test('clears a stale initialize preflight before configure', () async {
+      platform.hasActiveSession = true;
+      await expectLater(
+        client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key')),
+        throwsInvalidStateContaining('configure'),
+      );
+      platform.hasActiveSession = false;
+
+      await client.configure(const AsleepConfiguration(apiKey: 'test-api-key'));
+
+      expect(client.state.trackingStatus, TrackingStatus.idle);
+      expect(client.state.sessionId, isNull);
     });
 
     test('failed configure invalidates prior readiness', () async {
@@ -444,6 +671,62 @@ void main() {
         client.checkAndRestoreTracking(),
         throwsInvalidStateContaining('initialize'),
       );
+    });
+
+    test('rejects configure while a start command is pending', () async {
+      await prepareClient(client);
+      platform.startCompleter = Completer<void>();
+      final start = client.startTracking();
+      await pumpEventQueue();
+
+      await expectLater(
+        client.configure(
+          const AsleepConfiguration(apiKey: 'replacement-api-key'),
+        ),
+        throwsInvalidStateContaining('tracking'),
+      );
+
+      platform.startCompleter!.complete();
+      await start;
+    });
+
+    test('rejects configure while a recording-dead session remains', () async {
+      await prepareClient(client);
+      platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
+      platform.emit(
+        AsleepError(
+          code: 'AUDIO_INITIALIZATION_FAILED',
+          message: 'Recorder stopped.',
+          category: AsleepErrorCategory.recordingDead,
+        ).asTrackingFailure,
+      );
+
+      await expectLater(
+        client.configure(
+          const AsleepConfiguration(apiKey: 'replacement-api-key'),
+        ),
+        throwsInvalidStateContaining('tracking'),
+      );
+    });
+
+    test('configure rejection preserves a richer failure event', () async {
+      final nativeError = AsleepError(
+        code: 'INITIALIZATION_FAILED',
+        message: 'Native user join failed.',
+        numericCode: 22401,
+      );
+      platform
+        ..configureFailureEvent = nativeError
+        ..configureError = StateError('generic host rejection');
+
+      await expectLater(
+        client.configure(
+          const AsleepConfiguration(apiKey: 'replacement-api-key'),
+        ),
+        throwsStateError,
+      );
+
+      expect(client.state.error, same(nativeError));
     });
 
     test('rejects invalid custom URLs before invoking native setup', () async {
@@ -494,6 +777,12 @@ void main() {
           ),
           throwsInvalidArgument,
         );
+        await expectLater(
+          client.initialize(
+            const AsleepSetupOptions(apiKey: 'test-api-key', service: ''),
+          ),
+          throwsInvalidArgument,
+        );
 
         await client.initialize(
           const AsleepSetupOptions(apiKey: 'test-api-key'),
@@ -533,12 +822,21 @@ void main() {
         AsleepErrorCode.malformedPayload,
         'Malformed native event.',
       );
-      final emitted = expectLater(client.events, emitsError(same(expected)));
+      final stateSeenByErrorListener = Completer<AsleepError?>();
+      final subscription = client.events.listen(
+        (_) {},
+        onError: (Object _, StackTrace stackTrace) {
+          stateSeenByErrorListener.complete(client.state.error);
+        },
+      );
 
       platform.emitError(expected);
 
-      await emitted;
-      expect(client.state.error?.code, AsleepErrorCode.malformedPayload.name);
+      expect(
+        (await stateSeenByErrorListener.future)?.code,
+        AsleepErrorCode.malformedPayload.name,
+      );
+      await subscription.cancel();
     });
 
     test('dispose closes streams even when platform cleanup fails', () async {
@@ -554,6 +852,7 @@ void main() {
       );
       await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
       platform.disposeError = StateError('native cleanup failed');
+      disposeFailureExpected = true;
 
       await expectLater(client.dispose(), throwsStateError);
       await pumpEventQueue();
@@ -575,6 +874,24 @@ void main() {
 
       await eventSubscription.cancel();
       await stateSubscription.cancel();
+    });
+
+    test('concurrent dispose calls share cleanup completion', () async {
+      platform.disposeCompleter = Completer<void>();
+      await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
+
+      final first = client.dispose();
+      final second = client.dispose();
+      var secondCompleted = false;
+      unawaited(second.then((_) => secondCompleted = true));
+      await pumpEventQueue();
+
+      expect(identical(first, second), isTrue);
+      expect(secondCompleted, isFalse);
+
+      platform.disposeCompleter!.complete();
+      await Future.wait(<Future<void>>[first, second]);
+      expect(secondCompleted, isTrue);
     });
   });
 
@@ -610,16 +927,23 @@ class FakeAsleepPlatform extends AsleepPlatform {
 
   bool hasPermissions = true;
   bool hasActiveSession = false;
+  bool batteryExempted = true;
+  bool emitSetupCompletedBeforeReturn = false;
   Object? setupError;
   Object? configureError;
+  AsleepError? setupFailureEvent;
+  AsleepError? configureFailureEvent;
   Object? startError;
   Object? disposeError;
   Completer<void>? startCompleter;
   Completer<void>? stopCompleter;
   Completer<void>? resumeCompleter;
   Completer<AnalysisRequest>? analysisCompleter;
+  Completer<void>? disposeCompleter;
+  Completer<bool>? permissionCompleter;
   int permissionRequestCount = 0;
   int setupCount = 0;
+  int configureCount = 0;
   int startCount = 0;
   int stopCount = 0;
   int resumeCount = 0;
@@ -640,6 +964,12 @@ class FakeAsleepPlatform extends AsleepPlatform {
   @override
   Future<void> setup(AsleepSetupOptions options) async {
     setupCount++;
+    if (emitSetupCompletedBeforeReturn) {
+      emit(const SetupCompletedEvent());
+    }
+    if (setupFailureEvent case final error?) {
+      emit(SetupFailedEvent(error: error));
+    }
     if (setupError case final error?) {
       throw error;
     }
@@ -647,6 +977,10 @@ class FakeAsleepPlatform extends AsleepPlatform {
 
   @override
   Future<void> configure(AsleepConfiguration configuration) async {
+    configureCount++;
+    if (configureFailureEvent case final error?) {
+      emit(UserJoinFailedEvent(error: error));
+    }
     if (configureError case final error?) {
       throw error;
     }
@@ -659,14 +993,22 @@ class FakeAsleepPlatform extends AsleepPlatform {
 
   @override
   Future<BatteryOptimizationStatus> checkBatteryOptimization() async {
-    return const BatteryOptimizationStatus(exempted: true, platform: 'test');
+    return BatteryOptimizationStatus(
+      exempted: batteryExempted,
+      platform: 'test',
+    );
   }
 
   @override
   Future<bool> requestBatteryOptimizationExemption() async => true;
 
   @override
-  Future<bool> hasRequiredPermissions() async => hasPermissions;
+  Future<bool> hasRequiredPermissions() async {
+    if (permissionCompleter case final completer?) {
+      return completer.future;
+    }
+    return hasPermissions;
+  }
 
   @override
   Future<bool> requestRequiredPermissions() async {
@@ -731,6 +1073,7 @@ class FakeAsleepPlatform extends AsleepPlatform {
   @override
   Future<void> dispose() async {
     disposeCount++;
+    await disposeCompleter?.future;
     if (disposeError case final error?) {
       throw error;
     }
