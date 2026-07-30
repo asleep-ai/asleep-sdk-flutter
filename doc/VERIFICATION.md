@@ -1,6 +1,6 @@
 # Verification Record
 
-Verified on: 2026-07-29
+Record updated: 2026-07-30
 
 Toolchain:
 
@@ -12,24 +12,28 @@ Toolchain:
 - Xcode 26.6 at `/Applications/Xcode.app`
 - CocoaPods 1.17.0
 
-| Boundary | Command | Result |
+The source, package, native build, and archive results below were rerun against
+the signed experimental 0.1.0 candidate on 2026-07-30. They must be repeated if
+the release commit changes before manual publish.
+
+| Boundary | Command | Result / currency |
 |---|---|---|
 | Dart format | `dart format --output=none --set-exit-if-changed lib test example/lib example/test example/integration_test pigeons` | Pass |
-| Static analysis | `flutter analyze` | Pass, no issues |
-| Dart contract tests | `flutter test` | Pass, 13 tests |
+| Static analysis | `flutter analyze` | Pass with no issues |
+| Dart contract tests | `flutter test` | Pass, 74 tests |
 | Example widget test | `(cd example && flutter test)` | Pass, 1 test |
-| Dart API docs | `dart doc` | Pass, 0 warnings and 0 errors |
+| Dart API docs | `dart doc` | Pass with no warnings or errors |
 | API baseline | `dart pub global run dart_apitool:main extract --input . --set-exit-on-missing-export --force-use-flutter` with 0.23.2 | Pass |
-| Dependency freshness | `flutter pub outdated` | Pass; direct and transitive packages use the newest versions resolvable by the current Flutter SDK |
-| Pub score | pana 0.23.15 against a disposable copy | 140/160; 91/254 API elements documented; expected license and iOS SPM deficits remain |
-| Package validation | `dart pub publish --dry-run` in a disposable copy | Pass, 0 warnings, 102 KB compressed archive; no package was published |
-| Archive inspection | Sensitive filename and credential-pattern scan of the disposable copy and dry-run list | Pass; no credential pattern and no sensitive file in the archive list |
+| Dependency freshness | `flutter pub outdated` | All dependencies are the newest resolvable versions; 8 newer versions are incompatible with the selected SDK constraints |
+| Pub score | pana 0.23.15 against a disposable package copy | 140/160: 20/30 conventions, 20/20 documentation, 10/20 platform support, 50/50 static analysis, 40/40 dependencies |
+| Package validation | `dart pub publish --dry-run` in a clean `git archive HEAD` package copy | Pass with 0 warnings; compressed public archive is approximately 94 KB |
+| Archive inspection | Sensitive filename and credential-pattern scan of the clean `git archive HEAD` package copy | Pass |
 | Workflow lint | `actionlint .github/workflows/*.yml` | Pass |
-| Android bridge | `./gradlew :asleep_sdk_flutter:compileDebugKotlin :asleep_sdk_flutter:testDebugUnitTest` from `example/android` with Android Studio JBR and Android SDK | Pass, 3 transport and process-ownership tests |
-| Android example | `flutter build apk --debug` from `example` | Pass; `build/app/outputs/flutter-apk/app-debug.apk` |
-| Android device launch | `android run --device=R5KL105975E --apks=.../app-debug.apk`, then `android layout` | Pass on `SM-X236N`, Android 16; fresh install launched and rendered the explicit idle SDK journey |
-| CocoaPods plugin | `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer pod lib lint asleep_sdk_flutter.podspec --allow-warnings --skip-tests` | Pass; resolves and compiles `AsleepSDK 3.2.0` |
-| iOS example | `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer flutter build ios --simulator --debug` from `example` | Pass; `build/ios/iphonesimulator/Runner.app` |
+| Android bridge | Gradle compile, unit tests, lint, manifest processing | Pass, including 16 bridge tests, release lint, and a merged manifest without forced battery-exemption permission |
+| Android example | `flutter build apk --release` from `example` | Pass; release APK is approximately 93.9 MB |
+| Android device launch | `android run --device=R5KL105975E --apks=.../app-debug.apk`, then `android layout` | The earlier baseline passed on `SM-X236N`, Android 16; no current-candidate device runtime verification |
+| CocoaPods plugin | `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer pod lib lint asleep_sdk_flutter.podspec --allow-warnings --skip-tests` | Wrapper validation passes; the upstream `AsleepSDK` 3.2.0 pod still warns that its declared license file is missing |
+| iOS example | `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer flutter build ios --release --no-codesign` from `example` | Pass; unsigned device app is approximately 45.9 MB |
 
 ## Important verification notes
 
@@ -43,31 +47,44 @@ completed the full Swift compile successfully.
 The iOS plugin is intentionally CocoaPods-only because no supported public
 Swift Package Manager distribution for `AsleepSDK 3.2.0` was verified. Flutter
 3.44 warns that plugins without Swift Package Manager support may become an
-error in a future Flutter release. Adding SPM support is a publication blocker
-until the native SDK has an authorized, consumer-accessible SPM artifact.
+error in a future Flutter release. Experimental 0.1.0 does not claim SPM
+support; SPM can be added only after the native SDK has an authorized,
+consumer-accessible SPM artifact.
 
 The example Podfile now declares and applies the plugin's iOS 15 minimum to all
 Pod targets. This removes Xcode 26.6 target-integrity failures from generated
 Flutter and dependency targets without changing the plugin's documented
 minimum.
 
-The iOS restore bridge now uses the public
-`getTrackingStatus().sessionId` accessor from AsleepSDK 3.2.0 and the same
-contract as the React Native bridge. The rebuilt simulator application compiled
-successfully after this change. The native accessor cannot distinguish its
-internal open and closed states; that upstream ambiguity remains documented in
-the compatibility notes.
+The iOS restore bridge deliberately returns `hasActiveSession: false`.
+AsleepSDK 3.2.0 retains a session ID after close, so the public identifier
+cannot prove that a process-persistent tracking session exists. The current
+Swift implementation, complete pagination, pod lint, and unsigned release
+build pass locally.
 
-The first remote `main` CI run completed the Android APK build, all three
-Android unit tests, and the 90 MB artifact upload, then GitHub marked the job
-cancelled during cache cleanup at its former 30-minute timeout. The Android job
-timeout is now 45 minutes so successful first-cache builds can finish cleanup;
-the pull request run is the release-readiness proof for that adjustment.
+The pinned AsleepSDK 3.2.0 framework uses APIs that require its own accurate
+privacy declarations, but the distributed framework has no
+`PrivacyInfo.xcprivacy`. This is a native SDK App Store compliance follow-up,
+not a pub.dev publication blocker. Its podspec-declared license file is also
+absent, which CocoaPods reports as a warning.
 
-The remaining warnings come from external build inputs:
+The source framework's original code seal references Swift module files that
+CocoaPods removes during embedding. CocoaPods then signs the embedded dynamic
+framework with the consuming application's signing identity. Reproducing that
+copy, strip, and re-sign sequence passes strict code-signature verification.
+AsleepSDK is not in Apple's current list of third-party SDKs that require an
+upstream SDK signature, so source-archive signature verification is not a
+valid release gate for this package.
 
-- the local podspec uses `s.source = { :path => '.' }` because the public source
-  repository is UNKNOWN;
+Android restoration now performs an attachment-time
+`isSleepTrackingAlive(context)` probe before setup/configuration can assign the
+native SDK's process-global context. Restore then performs a fresh liveness
+check and connects the listener only when the service remains alive. Unit tests
+cover the initial probe and stale-probe false-positive case; process-death
+restoration still requires device verification.
+
+The prior CocoaPods warnings came from external build inputs:
+
 - the CocoaPods lint Flutter stub declares iOS 11 while Xcode 26.6 supports iOS
   12 and later;
 - the upstream `AsleepSDK 3.2.0` pod references a missing license file.
@@ -76,8 +93,6 @@ No physical-device tracking, microphone, background, process-restoration, or
 real sleep-session test was performed. Those runtime checks require an issued
 API key, supported devices, and product QA authorization.
 
-After the final multi-engine ownership patch, the rebuilt APK was reinstalled
-and its activity was activated successfully on the same device with no crash.
-The device display was sleeping, so the final rebuild did not produce a second
-useful UI layout capture; the rendered idle-journey layout above was captured
-from the immediately preceding build before that native-only lifecycle patch.
+In the prior baseline, the rebuilt APK was reinstalled and its activity was
+activated successfully after the multi-engine ownership patch. That result
+predates the current lifecycle changes and is not current device proof.

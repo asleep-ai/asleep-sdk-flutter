@@ -71,7 +71,10 @@ class _AsleepExamplePageState extends State<AsleepExamplePage> {
 
   @override
   Widget build(BuildContext context) {
-    final canStop = _snapshot.isTracking;
+    final canStop =
+        _snapshot.isTracking ||
+        (_snapshot.error?.category == AsleepErrorCategory.recordingDead &&
+            !_snapshot.didClose);
     return Scaffold(
       appBar: AppBar(title: const Text('Asleep SDK')),
       body: ListView(

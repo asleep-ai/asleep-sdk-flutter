@@ -18,6 +18,7 @@ enum AsleepErrorCategory {
 /// Errors produced by the Flutter client boundary.
 enum AsleepErrorCode {
   disposed,
+  invalidArgument,
   invalidState,
   permissionRequired,
   unsupportedPlatform,
@@ -123,13 +124,13 @@ class AnalysisRequest {
 
 /// Structured error received from a native Asleep SDK.
 class AsleepError {
-  const AsleepError({
+  AsleepError({
     required this.code,
     required this.message,
     this.category = AsleepErrorCategory.unknown,
     this.numericCode,
-    this.platformDetails = const <String, Object?>{},
-  });
+    Map<String, Object?> platformDetails = const <String, Object?>{},
+  }) : platformDetails = _immutableMap(platformDetails);
 
   factory AsleepError.fromJson(Map<String, Object?> json) {
     final categoryName = _string(json, 'category');
@@ -146,10 +147,11 @@ class AsleepError {
       message:
           _string(json, 'message') ??
           _string(json, 'error') ??
+          _string(json, 'detail') ??
           'Unknown native error',
       category: category,
       numericCode: numericCode,
-      platformDetails: Map<String, Object?>.unmodifiable(json),
+      platformDetails: json,
     );
   }
 
@@ -172,9 +174,15 @@ class AsleepError {
       case 'NETWORK_OFFLINE':
         return AsleepErrorCategory.transient;
       default:
-        return _terminalNumericCodes.contains(numericCode)
-            ? AsleepErrorCategory.terminal
-            : AsleepErrorCategory.unknown;
+        if (code == 'TRACKING_FAILED' &&
+            _terminalNumericCodes.contains(numericCode)) {
+          return AsleepErrorCategory.terminal;
+        }
+        if (code == 'TRACKING_FAILED' &&
+            _transientNumericCodes.contains(numericCode)) {
+          return AsleepErrorCategory.transient;
+        }
+        return AsleepErrorCategory.unknown;
     }
   }
 
@@ -193,6 +201,8 @@ class AsleepError {
     24404,
     24500,
   };
+
+  static const Set<int> _transientNumericCodes = <int>{23000, 23500};
 }
 
 /// Exception thrown by the Flutter SDK boundary.
@@ -217,20 +227,22 @@ class AsleepException implements Exception {
 
 /// Incremental analysis data for an active or completed session.
 class AsleepAnalysisResult {
-  const AsleepAnalysisResult({
+  AsleepAnalysisResult({
     this.id,
     this.state,
     this.startTime,
     this.endTime,
-    this.sleepStages,
-    this.breathStages,
-    this.snoringStages,
-  });
+    List<int>? sleepStages,
+    List<int>? breathStages,
+    List<int>? snoringStages,
+  }) : sleepStages = _immutableListOrNull(sleepStages),
+       breathStages = _immutableListOrNull(breathStages),
+       snoringStages = _immutableListOrNull(snoringStages);
 
   factory AsleepAnalysisResult.fromJson(Map<String, Object?> source) {
     final json = _camelized(source);
     return AsleepAnalysisResult(
-      id: _string(json, 'id'),
+      id: _optionalNonEmptyString(json, 'id'),
       state: _string(json, 'state'),
       startTime: _date(json, 'startTime'),
       endTime: _date(json, 'endTime'),
@@ -251,22 +263,24 @@ class AsleepAnalysisResult {
 
 /// Session metadata and stage data embedded in a detailed report.
 class AsleepReportSession {
-  const AsleepReportSession({
+  AsleepReportSession({
     required this.id,
     required this.createdTimezone,
     required this.startTime,
     this.endTime,
     this.unexpectedEndTime,
     required this.state,
-    this.sleepStages,
-    this.breathStages,
-    this.snoringStages,
-  });
+    List<int>? sleepStages,
+    List<int>? breathStages,
+    List<int>? snoringStages,
+  }) : sleepStages = _immutableListOrNull(sleepStages),
+       breathStages = _immutableListOrNull(breathStages),
+       snoringStages = _immutableListOrNull(snoringStages);
 
   factory AsleepReportSession.fromJson(Map<String, Object?> source) {
     final json = _camelized(source);
     return AsleepReportSession(
-      id: _requiredString(json, 'id'),
+      id: _requiredNonEmptyString(json, 'id'),
       createdTimezone: _requiredString(json, 'createdTimezone'),
       startTime: _requiredDate(json, 'startTime'),
       endTime: _date(json, 'endTime'),
@@ -294,34 +308,60 @@ class AsleepStat {
   AsleepStat._(this.values);
 
   factory AsleepStat.fromJson(Map<String, Object?> json) {
-    return AsleepStat._(Map<String, Object?>.unmodifiable(_camelized(json)));
+    return AsleepStat._(_camelized(json));
   }
 
   final Map<String, Object?> values;
 
+  List<String>? get sleepCycleTime => _stringList(values, 'sleepCycleTime');
+  int? get timeInStableBreath => _int(values, 'timeInStableBreath');
   int? get timeInBed => _int(values, 'timeInBed');
+  double? get unstableBreathRatio => _double(values, 'unstableBreathRatio');
+  int? get sleepCycle => _int(values, 'sleepCycle');
   int? get timeInSleep => _int(values, 'timeInSleep');
+  int? get deepLatency => _int(values, 'deepLatency');
+  int? get remLatency => _int(values, 'remLatency');
+  int? get timeInSnoring => _int(values, 'timeInSnoring');
+  String? get wakeTime => _string(values, 'wakeTime');
+  double? get lightRatio => _double(values, 'lightRatio');
+  double? get noSnoringRatio => _double(values, 'noSnoringRatio');
+  int? get snoringCount => _int(values, 'snoringCount');
+  int? get unstableBreathCount => _int(values, 'unstableBreathCount');
   int? get timeInWake => _int(values, 'timeInWake');
+  String? get sleepTime => _string(values, 'sleepTime');
+  int? get sleepCycleCount => _int(values, 'sleepCycleCount');
   int? get timeInRem => _int(values, 'timeInRem');
   int? get timeInLight => _int(values, 'timeInLight');
   int? get timeInDeep => _int(values, 'timeInDeep');
   int? get sleepLatency => _int(values, 'sleepLatency');
   int? get wakeupLatency => _int(values, 'wakeupLatency');
+  String? get breathingPattern => _string(values, 'breathingPattern');
+  double? get snoringRatio => _double(values, 'snoringRatio');
+  double? get stableBreathRatio => _double(values, 'stableBreathRatio');
+  int? get timeInSleepPeriod => _int(values, 'timeInSleepPeriod');
+  int? get lightLatency => _int(values, 'lightLatency');
+  double? get remRatio => _double(values, 'remRatio');
   int? get wasoCount => _int(values, 'wasoCount');
   int? get longestWaso => _int(values, 'longestWaso');
   double? get sleepEfficiency => _double(values, 'sleepEfficiency');
+  int? get timeInNoSnoring => _int(values, 'timeInNoSnoring');
+  int? get sleepIndex => _int(values, 'sleepIndex');
+  double? get sleepRatio => _double(values, 'sleepRatio');
+  int? get timeInUnstableBreath => _int(values, 'timeInUnstableBreath');
+  double? get wakeRatio => _double(values, 'wakeRatio');
+  double? get deepRatio => _double(values, 'deepRatio');
   double? get breathingIndex => _double(values, 'breathingIndex');
 }
 
 /// Detailed sleep report for one session.
 class AsleepReport {
-  const AsleepReport({
+  AsleepReport({
     required this.timezone,
     required this.session,
     required this.missingDataRatio,
-    required this.peculiarities,
+    required List<String> peculiarities,
     this.stat,
-  });
+  }) : peculiarities = List<String>.unmodifiable(peculiarities);
 
   factory AsleepReport.fromJson(Map<String, Object?> source) {
     final json = _camelized(source);
@@ -329,8 +369,8 @@ class AsleepReport {
     return AsleepReport(
       timezone: _requiredString(json, 'timezone'),
       session: AsleepReportSession.fromJson(_requiredMap(json, 'session')),
-      missingDataRatio: _double(json, 'missingDataRatio') ?? 0,
-      peculiarities: _stringList(json, 'peculiarities') ?? const <String>[],
+      missingDataRatio: _requiredDouble(json, 'missingDataRatio'),
+      peculiarities: _requiredStringList(json, 'peculiarities'),
       stat: stat == null ? null : AsleepStat.fromJson(stat),
     );
   }
@@ -361,7 +401,9 @@ class AsleepSession {
 
   factory AsleepSession.fromJson(Map<String, Object?> source) {
     final json = _camelized(source);
-    final id = _string(json, 'id') ?? _string(json, 'sessionId');
+    final id =
+        _optionalNonEmptyString(json, 'id') ??
+        _optionalNonEmptyString(json, 'sessionId');
     final start = _date(json, 'startTime') ?? _date(json, 'sessionStartTime');
     if (id == null || start == null) {
       throw const AsleepException(
@@ -423,7 +465,15 @@ class AsleepSleptSession {
     required this.id,
     required this.startTime,
     required this.endTime,
+    required this.completedTime,
     required this.createdTimezone,
+    required this.sleepEfficiency,
+    required this.timeInWake,
+    required this.timeInSleepPeriod,
+    required this.timeInSleep,
+    required this.timeInBed,
+    required this.wakeRatio,
+    required this.sleepRatio,
     required this.stats,
     required this.raw,
   });
@@ -431,19 +481,35 @@ class AsleepSleptSession {
   factory AsleepSleptSession.fromJson(Map<String, Object?> source) {
     final json = _camelized(source);
     return AsleepSleptSession._(
-      id: _requiredString(json, 'id'),
+      id: _requiredNonEmptyString(json, 'id'),
       startTime: _requiredDate(json, 'startTime'),
       endTime: _requiredDate(json, 'endTime'),
+      completedTime: _requiredDate(json, 'completedTime'),
       createdTimezone: _requiredString(json, 'createdTimezone'),
+      sleepEfficiency: _requiredDouble(json, 'sleepEfficiency'),
+      timeInWake: _requiredInt(json, 'timeInWake'),
+      timeInSleepPeriod: _requiredInt(json, 'timeInSleepPeriod'),
+      timeInSleep: _requiredInt(json, 'timeInSleep'),
+      timeInBed: _requiredInt(json, 'timeInBed'),
+      wakeRatio: _requiredDouble(json, 'wakeRatio'),
+      sleepRatio: _requiredDouble(json, 'sleepRatio'),
       stats: AsleepStat.fromJson(json),
-      raw: Map<String, Object?>.unmodifiable(json),
+      raw: json,
     );
   }
 
   final String id;
   final DateTime startTime;
   final DateTime endTime;
+  final DateTime completedTime;
   final String createdTimezone;
+  final double sleepEfficiency;
+  final int timeInWake;
+  final int timeInSleepPeriod;
+  final int timeInSleep;
+  final int timeInBed;
+  final double wakeRatio;
+  final double sleepRatio;
   final AsleepStat stats;
   final Map<String, Object?> raw;
 }
@@ -454,25 +520,25 @@ class AsleepNeverSleptSession {
     required this.id,
     required this.startTime,
     required this.endTime,
-    this.completedTime,
+    required this.completedTime,
     required this.raw,
   });
 
   factory AsleepNeverSleptSession.fromJson(Map<String, Object?> source) {
     final json = _camelized(source);
     return AsleepNeverSleptSession._(
-      id: _requiredString(json, 'id'),
+      id: _requiredNonEmptyString(json, 'id'),
       startTime: _requiredDate(json, 'startTime'),
       endTime: _requiredDate(json, 'endTime'),
-      completedTime: _date(json, 'completedTime'),
-      raw: Map<String, Object?>.unmodifiable(json),
+      completedTime: _requiredDate(json, 'completedTime'),
+      raw: json,
     );
   }
 
   final String id;
   final DateTime startTime;
   final DateTime endTime;
-  final DateTime? completedTime;
+  final DateTime completedTime;
   final Map<String, Object?> raw;
 }
 
@@ -480,19 +546,24 @@ class AsleepNeverSleptSession {
 class AsleepAverageReport {
   AsleepAverageReport._({
     required this.period,
-    required this.peculiarities,
+    required List<String> peculiarities,
     this.averageStats,
-    required this.sleptSessions,
-    required this.neverSleptSessions,
-    required this.raw,
-  });
+    required List<AsleepSleptSession> sleptSessions,
+    required List<AsleepNeverSleptSession> neverSleptSessions,
+    required Map<String, Object?> raw,
+  }) : peculiarities = List<String>.unmodifiable(peculiarities),
+       sleptSessions = List<AsleepSleptSession>.unmodifiable(sleptSessions),
+       neverSleptSessions = List<AsleepNeverSleptSession>.unmodifiable(
+         neverSleptSessions,
+       ),
+       raw = _immutableMap(raw);
 
   factory AsleepAverageReport.fromJson(Map<String, Object?> source) {
     final json = _camelized(source);
     final averageStats = _map(json, 'averageStats');
     return AsleepAverageReport._(
       period: AsleepReportPeriod.fromJson(_requiredMap(json, 'period')),
-      peculiarities: _stringList(json, 'peculiarities') ?? const <String>[],
+      peculiarities: _requiredStringList(json, 'peculiarities'),
       averageStats: averageStats == null
           ? null
           : AsleepStat.fromJson(averageStats),
@@ -505,7 +576,7 @@ class AsleepAverageReport {
                   const <Map<String, Object?>>[])
               .map(AsleepNeverSleptSession.fromJson)
               .toList(growable: false),
-      raw: Map<String, Object?>.unmodifiable(json),
+      raw: json,
     );
   }
 
@@ -583,53 +654,127 @@ class AsleepSnapshot {
 Map<String, Object?> decodeJsonMap(String value) => _decodeMap(value);
 
 Map<String, Object?> _decodeMap(String value) {
-  final decoded = jsonDecode(value);
+  final Object? decoded;
+  try {
+    decoded = jsonDecode(value);
+  } on FormatException catch (error) {
+    throw AsleepException(
+      AsleepErrorCode.malformedPayload,
+      'The native SDK returned invalid JSON.',
+      cause: error,
+    );
+  }
   if (decoded is! Map) {
     throw const AsleepException(
       AsleepErrorCode.malformedPayload,
       'Expected a JSON object from the native SDK.',
     );
   }
-  return decoded.map((key, value) => MapEntry(key.toString(), value));
+  return _stringKeyedMap(decoded);
 }
 
 Map<String, Object?> _camelized(Map<String, Object?> source) {
-  return source.map((key, value) {
-    final normalized = key.replaceAllMapped(
-      RegExp(r'_([a-z])'),
-      (match) => match.group(1)!.toUpperCase(),
-    );
-    return MapEntry(normalized, _camelizeValue(value));
-  });
+  return Map<String, Object?>.unmodifiable(
+    source.map((key, value) {
+      final normalized = key.replaceAllMapped(
+        RegExp(r'_([a-z])'),
+        (match) => match.group(1)!.toUpperCase(),
+      );
+      return MapEntry(normalized, _camelizeValue(value));
+    }),
+  );
 }
 
 Object? _camelizeValue(Object? value) {
   if (value is Map) {
-    return _camelized(
-      value.map((key, child) => MapEntry(key.toString(), child)),
-    );
+    return _camelized(_stringKeyedMap(value));
   }
   if (value is List) {
-    return value.map(_camelizeValue).toList(growable: false);
+    return List<Object?>.unmodifiable(value.map(_camelizeValue));
   }
   return value;
 }
 
-String? _string(Map<String, Object?> json, String key) =>
-    json[key] is String ? json[key] as String : null;
+String? _string(Map<String, Object?> json, String key) {
+  final value = json[key];
+  if (value == null) {
+    return null;
+  }
+  if (value is! String) {
+    throw _malformed('Field "$key" must be a string.');
+  }
+  return value;
+}
+
 String _requiredString(Map<String, Object?> json, String key) =>
     _string(json, key) ??
     (throw AsleepException(
       AsleepErrorCode.malformedPayload,
       'Missing string field "$key".',
     ));
-int? _int(Map<String, Object?> json, String key) =>
-    json[key] is num ? (json[key] as num).toInt() : null;
-double? _double(Map<String, Object?> json, String key) =>
-    json[key] is num ? (json[key] as num).toDouble() : null;
+
+String? _optionalNonEmptyString(Map<String, Object?> json, String key) {
+  final value = _string(json, key);
+  return value == null || value.isEmpty ? null : value;
+}
+
+String _requiredNonEmptyString(Map<String, Object?> json, String key) {
+  final value = _requiredString(json, key);
+  if (value.isEmpty) {
+    throw _malformed('Field "$key" must not be empty.');
+  }
+  return value;
+}
+
+int? _int(Map<String, Object?> json, String key) {
+  final value = json[key];
+  if (value == null) {
+    return null;
+  }
+  if (value is int) {
+    return value;
+  }
+  if (value is num && value.isFinite && value == value.truncateToDouble()) {
+    return value.toInt();
+  }
+  throw _malformed('Field "$key" must be an integer.');
+}
+
+int _requiredInt(Map<String, Object?> json, String key) =>
+    _int(json, key) ??
+    (throw AsleepException(
+      AsleepErrorCode.malformedPayload,
+      'Missing integer field "$key".',
+    ));
+
+double? _double(Map<String, Object?> json, String key) {
+  final value = json[key];
+  if (value == null) {
+    return null;
+  }
+  if (value is! num || !value.isFinite) {
+    throw _malformed('Field "$key" must be a finite number.');
+  }
+  return value.toDouble();
+}
+
+double _requiredDouble(Map<String, Object?> json, String key) =>
+    _double(json, key) ??
+    (throw AsleepException(
+      AsleepErrorCode.malformedPayload,
+      'Missing number field "$key".',
+    ));
+
 DateTime? _date(Map<String, Object?> json, String key) {
   final value = _string(json, key);
-  return value == null ? null : DateTime.tryParse(value)?.toUtc();
+  if (value == null) {
+    return null;
+  }
+  final parsed = DateTime.tryParse(value);
+  if (parsed == null) {
+    throw _malformed('Field "$key" must be an ISO-8601 date.');
+  }
+  return parsed.toUtc();
 }
 
 DateTime _requiredDate(Map<String, Object?> json, String key) =>
@@ -638,11 +783,16 @@ DateTime _requiredDate(Map<String, Object?> json, String key) =>
       AsleepErrorCode.malformedPayload,
       'Missing date field "$key".',
     ));
+
 Map<String, Object?>? _map(Map<String, Object?> json, String key) {
   final value = json[key];
-  return value is Map
-      ? value.map((childKey, child) => MapEntry(childKey.toString(), child))
-      : null;
+  if (value == null) {
+    return null;
+  }
+  if (value is! Map) {
+    throw _malformed('Field "$key" must be an object.');
+  }
+  return _stringKeyedMap(value);
 }
 
 Map<String, Object?> _requiredMap(Map<String, Object?> json, String key) =>
@@ -651,24 +801,104 @@ Map<String, Object?> _requiredMap(Map<String, Object?> json, String key) =>
       AsleepErrorCode.malformedPayload,
       'Missing object field "$key".',
     ));
-List<int>? _intList(Map<String, Object?> json, String key) => json[key] is List
-    ? (json[key] as List)
-          .whereType<num>()
-          .map((value) => value.toInt())
-          .toList(growable: false)
-    : null;
-List<String>? _stringList(Map<String, Object?> json, String key) =>
-    json[key] is List
-    ? (json[key] as List).whereType<String>().toList(growable: false)
-    : null;
-List<Map<String, Object?>>? _mapList(Map<String, Object?> json, String key) =>
-    json[key] is List
-    ? (json[key] as List)
-          .whereType<Map>()
-          .map(
-            (value) => value.map(
-              (childKey, child) => MapEntry(childKey.toString(), child),
-            ),
-          )
-          .toList(growable: false)
-    : null;
+List<int>? _intList(Map<String, Object?> json, String key) {
+  final values = _list(json, key);
+  if (values == null) {
+    return null;
+  }
+  return List<int>.unmodifiable(
+    values.indexed.map((entry) {
+      final (index, value) = entry;
+      if (value is int) {
+        return value;
+      }
+      if (value is num && value.isFinite && value == value.truncateToDouble()) {
+        return value.toInt();
+      }
+      throw _malformed('Field "$key[$index]" must be an integer.');
+    }),
+  );
+}
+
+List<String>? _stringList(Map<String, Object?> json, String key) {
+  final values = _list(json, key);
+  if (values == null) {
+    return null;
+  }
+  return List<String>.unmodifiable(
+    values.indexed.map((entry) {
+      final (index, value) = entry;
+      if (value is! String) {
+        throw _malformed('Field "$key[$index]" must be a string.');
+      }
+      return value;
+    }),
+  );
+}
+
+List<String> _requiredStringList(Map<String, Object?> json, String key) =>
+    _stringList(json, key) ??
+    (throw AsleepException(
+      AsleepErrorCode.malformedPayload,
+      'Missing list field "$key".',
+    ));
+
+List<Map<String, Object?>>? _mapList(Map<String, Object?> json, String key) {
+  final values = _list(json, key);
+  if (values == null) {
+    return null;
+  }
+  return List<Map<String, Object?>>.unmodifiable(
+    values.indexed.map((entry) {
+      final (index, value) = entry;
+      if (value is! Map) {
+        throw _malformed('Field "$key[$index]" must be an object.');
+      }
+      return _stringKeyedMap(value);
+    }),
+  );
+}
+
+List<Object?>? _list(Map<String, Object?> json, String key) {
+  final value = json[key];
+  if (value == null) {
+    return null;
+  }
+  if (value is! List) {
+    throw _malformed('Field "$key" must be a list.');
+  }
+  return value;
+}
+
+Map<String, Object?> _stringKeyedMap(Map<Object?, Object?> source) {
+  final result = <String, Object?>{};
+  for (final entry in source.entries) {
+    if (entry.key is! String) {
+      throw _malformed('JSON object keys must be strings.');
+    }
+    result[entry.key! as String] = entry.value;
+  }
+  return _immutableMap(result);
+}
+
+Map<String, Object?> _immutableMap(Map<String, Object?> source) {
+  return Map<String, Object?>.unmodifiable(
+    source.map((key, value) => MapEntry(key, _immutableValue(value))),
+  );
+}
+
+Object? _immutableValue(Object? value) {
+  if (value is Map) {
+    return _stringKeyedMap(value);
+  }
+  if (value is List) {
+    return List<Object?>.unmodifiable(value.map(_immutableValue));
+  }
+  return value;
+}
+
+List<T>? _immutableListOrNull<T>(List<T>? values) =>
+    values == null ? null : List<T>.unmodifiable(values);
+
+AsleepException _malformed(String message) =>
+    AsleepException(AsleepErrorCode.malformedPayload, message);

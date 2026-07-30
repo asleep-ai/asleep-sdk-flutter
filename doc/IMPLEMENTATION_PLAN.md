@@ -1,6 +1,6 @@
 # Asleep Flutter SDK Implementation Plan
 
-Verified on: 2026-07-29
+Verified on: 2026-07-30
 
 ## Scope
 
@@ -41,9 +41,9 @@ state management.
     state, event handling, and cleanup without defining the SDK architecture.
 11. README, API usage, compatibility and migration notes, architecture ADRs,
     changelog, package metadata, and native integration requirements are
-    sufficient for a local release candidate.
-12. No reference checkout, remote repository, package registry, pull request,
-    release, or external publication is modified.
+    sufficient for the experimental public 0.1.0 candidate.
+12. Tag creation, publication, and other external release mutations remain
+    separate approval-gated operations after the candidate is verified.
 
 ## Design Stages
 
@@ -60,11 +60,10 @@ state management.
 
 ## Initial Assumptions
 
-- The local package name is `asleep_sdk_flutter`; the folder is
-  `asleep-sdk-flutter`. Publication naming remains provisional until ownership
-  is confirmed.
-- The local package version starts at `0.1.0-dev.1` and does not imply a public
-  release.
+- The selected package name is `asleep_sdk_flutter`; the folder is
+  `asleep-sdk-flutter`, and the verified publisher is `asleep.ai`.
+- The first public candidate is experimental version `0.1.0`. Its `0.x` status
+  allows compatibility to evolve but does not relax publication gates.
 - Android API 24 and iOS 15 are the conservative local floors after
   reconciliation with the current native SDK projects.
 - The Flutter SDK's built-in `Stream` and immutable value objects are the
@@ -74,11 +73,13 @@ state management.
   into the public API; the decision and regeneration constraints are recorded
   in ADR 0002.
 
-## Explicit Unknowns Before Publication
+## Remaining Decisions Before Publication
 
-- Pub package ownership and final package identifier.
-- Public source repository URL, issue tracker, homepage, funding, and topics.
-- License grant and copyright holder.
-- Supported native SDK distribution credentials and public artifact access.
+- Public source repository URL, issue tracker, support, security, and
+  documentation URLs. Private GitHub URLs are intentionally omitted from
+  public package metadata.
+- Public redistribution approval for the Dart wrapper and both native SDK
+  dependency paths.
 - Final Flutter/Dart lower bounds across the intended consumer fleet.
-- Native SDK version policy and compatibility matrix for the first release.
+- Long-term Android/iOS compatibility and deprecation policy beyond the pinned
+  Android 3.2.1 and iOS 3.2.0 experimental baseline.

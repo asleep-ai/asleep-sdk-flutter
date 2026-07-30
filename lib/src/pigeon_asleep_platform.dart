@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/services.dart';
 
@@ -9,15 +8,22 @@ import 'asleep_platform.dart';
 import 'transport.g.dart' as transport;
 
 class PigeonAsleepPlatform extends AsleepPlatform {
-  PigeonAsleepPlatform({transport.AsleepHostApi? hostApi})
+  PigeonAsleepPlatform({transport.AsleepHostApi? hostApi, this._eventStream})
     : _hostApi = hostApi ?? transport.AsleepHostApi();
 
   final transport.AsleepHostApi _hostApi;
+  final Stream<transport.NativeEventMessage>? _eventStream;
   Stream<AsleepEvent>? _events;
+  static Stream<AsleepEvent>? _sharedEvents;
 
   @override
-  Stream<AsleepEvent> get events =>
-      _events ??= transport.events().map(_decodeEvent).asBroadcastStream();
+  Stream<AsleepEvent> get events {
+    final injected = _eventStream;
+    if (injected != null) {
+      return _events ??= injected.map(_decodeEvent);
+    }
+    return _events ??= _sharedEvents ??= transport.events().map(_decodeEvent);
+  }
 
   @override
   Future<void> setup(AsleepSetupOptions options) {
@@ -111,9 +117,14 @@ class PigeonAsleepPlatform extends AsleepPlatform {
     final result = await _hostApi.requestAnalysis().asAsleepFuture();
     final immediateJson = result.resultJson;
     return AnalysisRequest(
-      status: result.status == 'completed'
-          ? AnalysisRequestStatus.completed
-          : AnalysisRequestStatus.requested,
+      status: switch (result.status) {
+        'requested' => AnalysisRequestStatus.requested,
+        'completed' => AnalysisRequestStatus.completed,
+        final status => throw AsleepException(
+          AsleepErrorCode.malformedPayload,
+          'Unknown native analysis request status "$status".',
+        ),
+      },
       timestamp: result.timestampMilliseconds == null
           ? null
           : DateTime.fromMillisecondsSinceEpoch(
@@ -177,19 +188,23 @@ class PigeonAsleepPlatform extends AsleepPlatform {
       transport.AudioSessionOptionMessage.allowBluetoothA2DP,
   };
 
-  AsleepEvent _decodeEvent(transport.NativeEventMessage message) {
+  static AsleepEvent _decodeEvent(transport.NativeEventMessage message) {
     final payload = _eventPayload(message.payloadJson);
     switch (message.type) {
       case 'onTrackingCreated':
-        return TrackingCreatedEvent(sessionId: _string(payload, 'sessionId'));
+        return TrackingCreatedEvent(
+          sessionId: _optionalNonEmptyString(payload, 'sessionId'),
+        );
       case 'onTrackingUploaded':
-        return TrackingUploadedEvent(sequence: _int(payload, 'sequence') ?? 0);
+        return TrackingUploadedEvent(
+          sequence: _requiredInt(payload, 'sequence'),
+        );
       case 'onTrackingClosed':
         return TrackingClosedEvent(
-          sessionId: _string(payload, 'sessionId') ?? '',
+          sessionId: _optionalNonEmptyString(payload, 'sessionId'),
         );
       case 'onTrackingFailed':
-        return TrackingFailedEvent(error: AsleepError.fromJson(payload));
+        return TrackingFailedEvent(error: _error(payload));
       case 'onTrackingInterrupted':
         return const TrackingInterruptedEvent();
       case 'onTrackingResumed':
@@ -197,47 +212,106 @@ class PigeonAsleepPlatform extends AsleepPlatform {
       case 'onMicPermissionDenied':
         return const MicrophonePermissionDeniedEvent();
       case 'onUserJoined':
-        return UserJoinedEvent(userId: _string(payload, 'userId') ?? '');
+        return UserJoinedEvent(
+          userId: _requiredNonEmptyString(payload, 'userId'),
+        );
       case 'onUserJoinFailed':
-        return UserJoinFailedEvent(error: AsleepError.fromJson(payload));
+        return UserJoinFailedEvent(error: _error(payload));
       case 'onUserDeleted':
-        return UserDeletedEvent(userId: _string(payload, 'userId') ?? '');
+        return UserDeletedEvent(
+          userId: _requiredNonEmptyString(payload, 'userId'),
+        );
       case 'onSetupDidComplete':
         return const SetupCompletedEvent();
       case 'onSetupDidFail':
-        return SetupFailedEvent(error: AsleepError.fromJson(payload));
+        return SetupFailedEvent(error: _error(payload));
       case 'onSetupInProgress':
         return SetupProgressEvent(
-          progress: (_number(payload, 'progress') ?? 0).toDouble(),
+          progress: _requiredNumber(payload, 'progress').toDouble(),
         );
       case 'onAnalysisResult':
         return AnalysisResultEvent(
           result: AsleepAnalysisResult.fromJson(payload),
         );
       case 'onDebugLog':
-        return DebugLogEvent(message: _string(payload, 'message') ?? '');
+        return DebugLogEvent(message: _requiredString(payload, 'message'));
       default:
         return UnknownNativeEvent(type: message.type, payload: payload);
     }
   }
 
-  Map<String, Object?> _eventPayload(String value) {
+  static Map<String, Object?> _eventPayload(String value) {
     if (value.isEmpty || value == 'null') {
       return const <String, Object?>{};
     }
-    final decoded = jsonDecode(value);
-    if (decoded is! Map) {
-      return <String, Object?>{'value': decoded};
-    }
-    return decoded.map((key, child) => MapEntry(key.toString(), child));
+    return decodeJsonMap(value);
   }
 
-  String? _string(Map<String, Object?> json, String key) =>
-      json[key] is String ? json[key] as String : null;
-  int? _int(Map<String, Object?> json, String key) =>
-      json[key] is num ? (json[key] as num).toInt() : null;
-  num? _number(Map<String, Object?> json, String key) =>
-      json[key] is num ? json[key] as num : null;
+  static String? _string(Map<String, Object?> json, String key) {
+    final value = json[key];
+    if (value == null) {
+      return null;
+    }
+    if (value is! String) {
+      throw _malformedEvent('Field "$key" must be a string.');
+    }
+    return value;
+  }
+
+  static String _requiredString(Map<String, Object?> json, String key) =>
+      _string(json, key) ??
+      (throw _malformedEvent('Missing string field "$key".'));
+
+  static String _requiredNonEmptyString(Map<String, Object?> json, String key) {
+    final value = _requiredString(json, key);
+    if (value.isEmpty) {
+      throw _malformedEvent('Field "$key" must not be empty.');
+    }
+    return value;
+  }
+
+  static String? _optionalNonEmptyString(
+    Map<String, Object?> json,
+    String key,
+  ) {
+    final value = _string(json, key);
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  static int _requiredInt(Map<String, Object?> json, String key) {
+    final value = json[key];
+    if (value is int) {
+      return value;
+    }
+    if (value is num && value.isFinite && value == value.truncateToDouble()) {
+      return value.toInt();
+    }
+    throw _malformedEvent('Field "$key" must be an integer.');
+  }
+
+  static num _requiredNumber(Map<String, Object?> json, String key) {
+    final value = json[key];
+    if (value is! num || !value.isFinite) {
+      throw _malformedEvent('Field "$key" must be a finite number.');
+    }
+    return value;
+  }
+
+  static AsleepError _error(Map<String, Object?> payload) {
+    _requiredNonEmptyString(payload, 'code');
+    final message = _string(payload, 'message') ?? _string(payload, 'error');
+    if (message == null || message.isEmpty) {
+      throw _malformedEvent(
+        'An error event must contain a non-empty message or error field.',
+      );
+    }
+    return AsleepError.fromJson(payload);
+  }
+
+  static AsleepException _malformedEvent(String message) => AsleepException(
+    AsleepErrorCode.malformedPayload,
+    'Malformed native event: $message',
+  );
 }
 
 extension _NativeFuture<T> on Future<T> {

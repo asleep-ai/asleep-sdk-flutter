@@ -1,20 +1,21 @@
 # Migration from `react-native-asleep`
 
-This document maps the React Native 1.2 developer journey to the initial Flutter
-draft. It is not a promise of one-to-one naming compatibility.
+This document maps the React Native 1.2 developer journey to experimental
+Flutter 0.1.0. It is not a promise of one-to-one naming compatibility.
 
-| React Native 1.2 | Flutter draft | Notes |
+| React Native 1.2 | Flutter 0.1.0 | Notes |
 |---|---|---|
 | `useAsleep()` | `AsleepClient.state`, `states`, `events` | Flutter does not expose a React-shaped hook or third-party store. |
 | `Asleep.initialize()` | Construct one `AsleepClient`; call `initialize()` or `configure()` | Dispose the client when its application owner is destroyed. |
 | `setup(config)` | `initialize(AsleepSetupOptions)` | The future completes after native setup and configuration are ready; progress and the projected lifecycle remain event-driven. |
 | `initAsleepConfig(config)` | `configure(AsleepConfiguration)` | Use when the user-oriented configuration path is required. |
-| `checkAndRestoreTracking()` | Same name | Android reconnects to the foreground service; iOS reports no process-persistent session. |
+| `checkAndRestoreTracking()` | Same name | Initialization/configuration runs an Android preflight before native setup. The explicit check rechecks service liveness and reconnects the listener; iOS returns no process-persistent session. |
 | `hasRequiredPermissions()` | Same name | This check never opens a system dialog. |
 | `requestRequiredPermissions()` | Same name | Call only from an application-controlled user interaction. |
 | `startTracking(config)` | `startTracking(options)` | Throws `permissionRequired`; it never requests permission automatically. |
 | `resumeTracking()` | Same name | iOS-only recovery operation. |
 | `requestAnalysis()` | Same name plus `AnalysisRequest` | Immediate Android data is `immediateResult`; canonical results also arrive as `AnalysisResultEvent`. |
+| `getReportList(fromDate, toDate)` | Same name | Flutter pages both native report APIs until the first partial page and returns the complete aggregate list. |
 | `useAsleep().trackingStatus` | `AsleepSnapshot.trackingStatus` | `paused` and `recoveryRequired` still represent a live native session. |
 | `addEventListener()` | `events.listen()` | Cancel the Dart subscription or dispose the client. |
 | `Asleep.subscribe()` | `states.listen()` | Read `state` first when the current value is needed; broadcast streams do not replay. |

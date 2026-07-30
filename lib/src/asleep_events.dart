@@ -19,8 +19,8 @@ class TrackingUploadedEvent extends AsleepEvent {
 
 /// Indicates that tracking closed for a session.
 class TrackingClosedEvent extends AsleepEvent {
-  const TrackingClosedEvent({required this.sessionId});
-  final String sessionId;
+  const TrackingClosedEvent({this.sessionId});
+  final String? sessionId;
 }
 
 /// Indicates that tracking failed.
@@ -93,7 +93,10 @@ class DebugLogEvent extends AsleepEvent {
 
 /// Preserves an unrecognized native event for forward compatibility.
 class UnknownNativeEvent extends AsleepEvent {
-  const UnknownNativeEvent({required this.type, required this.payload});
+  UnknownNativeEvent({
+    required this.type,
+    required Map<String, Object?> payload,
+  }) : payload = Map<String, Object?>.unmodifiable(payload);
 
   final String type;
   final Map<String, Object?> payload;

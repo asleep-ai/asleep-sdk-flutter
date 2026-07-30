@@ -1,28 +1,27 @@
 # Asleep SDK for Flutter
 
-Local development draft of an Android and iOS Flutter plugin for Asleep
-audio-based sleep tracking.
+Experimental Android and iOS Flutter plugin for Asleep audio-based sleep
+tracking.
 
-> This package is not ready for publication. Package ownership, license,
-> native artifact access, and the final compatibility policy are unresolved.
-> `publish_to: none` prevents accidental `pub.dev` publication.
+> **EXPERIMENTAL — NOT RECOMMENDED FOR PRODUCTION USE**
+>
+> This `0.x` package is an early preview. APIs, behavior, platform
+> requirements, and native SDK compatibility may change without notice.
+> Deployment requires Asleep credentials and application review. App Store
+> privacy readiness and unattended overnight tracking have not been certified
+> for this release.
 
 ## Contract snapshot
 
-| Layer | Draft baseline |
+| Layer | Experimental 0.1.0 baseline |
 |---|---|
-| React Native developer journey | `react-native-asleep` 1.2.0, `origin/main` at `58ec6aa` |
+| React Native developer journey | `react-native-asleep` 1.2.0 |
 | Android native artifact | `ai.asleep:asleepsdk:3.2.1` |
 | iOS native artifact | `AsleepSDK` 3.2.0 |
-| Flutter tool used for generation | Flutter 3.44.8 / Dart 3.12.2 |
-| Minimum platform draft | Android API 24 / iOS 15 |
+| Flutter toolchain | Flutter 3.44.8 / Dart 3.12.2 |
+| Minimum platforms | Android API 24 / iOS 15 |
 | State surface | Immutable snapshot + `Future` commands + broadcast `Stream` |
 | Transport | Pigeon 27.3.0, internal generated API |
-
-See [the contract matrix](doc/CONTRACT_MATRIX.md) for the source-level
-comparison and [compatibility notes](doc/COMPATIBILITY.md) before integrating.
-See [the distribution contract](doc/DISTRIBUTION.md) before creating a tag or
-removing `publish_to: none`.
 
 ## Developer journey
 
@@ -59,6 +58,12 @@ await asleep.initialize(
 
 final restore = await asleep.checkAndRestoreTracking();
 final battery = await asleep.checkBatteryOptimization();
+
+if (!battery.exempted) {
+  // Call from an app-controlled user interaction, then recheck after return.
+  await asleep.requestBatteryOptimizationExemption();
+  return;
+}
 
 if (!await asleep.hasRequiredPermissions()) {
   // Call from an app-controlled user interaction.
@@ -113,14 +118,39 @@ Android applications must declare:
 - `android.permission.RECORD_AUDIO`
 - `android.permission.FOREGROUND_SERVICE`
 - `android.permission.FOREGROUND_SERVICE_MICROPHONE`
-- `android.permission.POST_NOTIFICATIONS` for notification visibility on
-  Android 13 and later
+
+The plugin also declares `android.permission.POST_NOTIFICATIONS` for
+foreground-notification visibility on Android 13 and later. Notification
+denial does not mean microphone permission was denied and does not change the
+return value of `requestRequiredPermissions()`.
+
+Direct battery-optimization exemption is opt-in. The plugin does not inject
+`android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` into consuming apps.
+Without that declaration, `requestBatteryOptimizationExemption()` opens the
+general battery-optimization settings. A consuming app may declare the direct
+exemption permission only after confirming that its core function qualifies
+under Google Play policy.
 
 iOS applications must add `NSMicrophoneUsageDescription` and the `audio`
 background mode. The Asleep iOS SDK configures and activates
 `AVAudioSession.playAndRecord` for tracking and intentionally does not restore
 the previous audio-session state. Applications must coordinate other audio
-features accordingly.
+features accordingly. iOS process restoration is not supported; the iOS
+restore result is always `false`.
+
+The native Android artifact contains ARM device libraries only. Use an ARM64
+device for tracking and on-device analysis; Intel Android emulators are not a
+supported runtime target.
+
+The native AsleepSDK 3.2.0 release is currently distributed through CocoaPods,
+so this plugin cannot yet provide a complete Swift Package Manager dependency
+chain.
+
+The pinned AsleepSDK 3.2.0 CocoaPods artifact does not contain a privacy
+manifest. This does not prevent pub.dev publication or the existing native SDK
+from running, but applications remain responsible for App Store privacy
+compliance. A future native SDK release should bundle its required-reason API
+declarations directly.
 
 ## State and event semantics
 
@@ -129,8 +159,13 @@ one-time native facts. Do not use the state stream as an event queue.
 
 `TrackingStatus.paused` and `TrackingStatus.recoveryRequired` still describe a
 live native session. On iOS, call `resumeTracking()` after the app returns to
-the foreground when recovery is required. Android process restoration reconnects
-to the native foreground service.
+the foreground when recovery is required. A successful subsequent upload is
+the proof that recovery completed. Android probes and reconnects to the native
+foreground service before native setup can replace the process context.
+
+An `AsleepErrorCategory.recordingDead` failure means recording stopped while
+the native session remains open. Call `stopTracking()` before starting another
+session even though the projected tracking status is `idle`.
 
 `requestAnalysis()` reflects a native platform difference:
 
@@ -140,11 +175,15 @@ to the native foreground service.
 
 The canonical cross-platform result path is the event stream.
 
+`getReportList()` follows the native offset/limit APIs until the final partial
+page, rather than silently truncating the range at 100 sessions.
+
 ## Error handling
 
-Public commands fail with `AsleepException` for Dart lifecycle and validation
-errors or a platform exception for native failures. Tracking and setup delegate
-failures are projected as typed events and `AsleepSnapshot.error`.
+Public commands fail with `AsleepException` for lifecycle, validation, and
+native failures. Native command failures preserve the platform SDK code and
+details. Tracking and setup delegate failures are also projected as typed
+events and `AsleepSnapshot.error`.
 
 Use semantic `AsleepError.code` before numeric fallback. The same numeric value
 can have different historical meanings across platforms. On iOS,
@@ -170,8 +209,8 @@ flutter test
 (cd example && flutter test)
 ```
 
-Native builds require access to the Asleep Android and iOS artifacts. See
-[compatibility notes](doc/COMPATIBILITY.md) for the exact unresolved boundary.
+Native builds require network access to the public Asleep Android Maven and
+iOS CocoaPods artifacts.
 
 ## CI and delivery
 
@@ -179,24 +218,14 @@ GitHub Actions runs Dart contracts, Android bridge tests and an example APK
 build, plus CocoaPods validation and an iOS simulator build. Pushes to `main`
 and manual runs retain the non-production example artifacts for seven days.
 
-This internal delivery path does not publish to pub.dev, create a GitHub
-release, produce a production/device-signed build, or embed an API key. Public
-publishing remains disabled until the compatibility and legal blockers are
-resolved.
+Release tags must be signed, point to a commit contained in `main`, match the
+package and changelog versions, and pass Dart, Android, iOS, archive, API, and
+package-score validation. The first pub.dev release is published manually and
+transferred to the verified `asleep.ai` publisher. OIDC publishing and GitHub
+Release creation stay disabled until their repository variables are explicitly
+approved.
 
-Release-candidate tags run validation. The pub.dev OIDC and generated-notes
-GitHub Release jobs remain skipped unless maintainers explicitly set
-`PUBDEV_PUBLISH_ENABLED=true` or `RELEASE_CREATION_ENABLED=true`. Both variables
-must remain unset before their corresponding approvals.
+## License
 
-## Documentation
-
-- [Implementation plan and success criteria](doc/IMPLEMENTATION_PLAN.md)
-- [Architecture](doc/ARCHITECTURE.md)
-- [State model ADR](doc/adr/0001-state-model.md)
-- [Platform transport ADR](doc/adr/0002-platform-transport.md)
-- [Contract matrix](doc/CONTRACT_MATRIX.md)
-- [Compatibility and release blockers](doc/COMPATIBILITY.md)
-- [Verification record](doc/VERIFICATION.md)
-- [React Native migration map](doc/MIGRATION.md)
-- [Distribution and release contract](doc/DISTRIBUTION.md)
+This package uses Asleep's proprietary SDK license. Use, modification, and
+redistribution require authorization from Asleep.
