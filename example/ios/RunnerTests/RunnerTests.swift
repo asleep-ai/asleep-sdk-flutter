@@ -23,6 +23,16 @@ class RunnerTests: XCTestCase {
     XCTAssertTrue(gate.acceptsCreatedSession)
   }
 
+  func testTrackingStartRecoveryErrorPreservesCodeAndMessage() {
+    let error = trackingStartRecoveryRequiredError()
+
+    XCTAssertEqual(error.code, "TRACKING_START_RECOVERY_REQUIRED")
+    XCTAssertEqual(
+      error.message,
+      "Wait for the timed-out or cancelled tracking start to close before retrying"
+    )
+  }
+
   func testTrackingFailuresClassifyOnlyDefinitiveTerminationPaths() {
     XCTAssertTrue(
       trackingFailureTerminatesSession(

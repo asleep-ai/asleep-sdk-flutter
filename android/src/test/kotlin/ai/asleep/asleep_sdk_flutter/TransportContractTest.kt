@@ -194,6 +194,7 @@ internal class TransportContractTest {
         var timeout: Runnable? = null
         var firstResult: Result<Unit>? = null
         var secondCalled = false
+        var failureEventCount = 0
         val coordinator =
             InitializationCoordinator(
                 operation = "setup",
@@ -202,6 +203,7 @@ internal class TransportContractTest {
                     timeout = runnable
                 },
                 cancel = {},
+                onTimeout = { failureEventCount += 1 },
             )
 
         val attempt = assertNotNull(coordinator.begin { firstResult = it })
@@ -212,6 +214,7 @@ internal class TransportContractTest {
         assertEquals("INITIALIZATION_TIMEOUT", error.code)
         assertTrue(coordinator.isBusy)
         assertFalse(coordinator.isAwaiting(attempt))
+        assertEquals(1, failureEventCount)
         assertNull(coordinator.begin { secondCalled = true })
         assertFalse(secondCalled)
     }

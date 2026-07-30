@@ -442,6 +442,15 @@ private class AndroidAsleepHostApi(
             operation = "configuration",
             schedule = mainHandler::postDelayed,
             cancel = mainHandler::removeCallbacks,
+            onTimeout = {
+                emit(
+                    "onUserJoinFailed",
+                    mapOf(
+                        "code" to "INITIALIZATION_TIMEOUT",
+                        "message" to "The native Asleep SDK did not complete configuration",
+                    ),
+                )
+            },
         )
     private val trackingStartCoordinator =
         TrackingStartCoordinator(

@@ -61,6 +61,14 @@ func trackingFailureTerminatesSession(_ error: Asleep.AsleepError) -> Bool {
   }
 }
 
+func trackingStartRecoveryRequiredError() -> PigeonError {
+  PigeonError(
+    code: "TRACKING_START_RECOVERY_REQUIRED",
+    message: "Wait for the timed-out or cancelled tracking start to close before retrying",
+    details: nil
+  )
+}
+
 public final class AsleepSdkFlutterPlugin: NSObject, FlutterPlugin {
   private let events = IosEventsStreamHandler()
   private lazy var hostApi = IosAsleepHostApi(events: events)
@@ -276,7 +284,7 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
       return
     }
     guard trackingStartRecoveryGate.canStart else {
-      completion(.failure(BridgeError.trackingStartRecoveryRequired))
+      completion(.failure(trackingStartRecoveryRequiredError()))
       return
     }
     var options: AVAudioSession.CategoryOptions = []
@@ -818,7 +826,6 @@ private enum BridgeError: LocalizedError {
   case trackingManagerUnavailable
   case trackingNotActive
   case trackingStartInProgress
-  case trackingStartRecoveryRequired
   case trackingStartTimeout
   case trackingStartCancelled
   case trackingClosedBeforeStart
@@ -841,8 +848,6 @@ private enum BridgeError: LocalizedError {
       return "Sleep tracking is not active"
     case .trackingStartInProgress:
       return "Tracking start is already in progress"
-    case .trackingStartRecoveryRequired:
-      return "Wait for the timed-out or cancelled tracking start to close before retrying"
     case .trackingStartTimeout:
       return "The native Asleep SDK did not acknowledge tracking start"
     case .trackingStartCancelled:
