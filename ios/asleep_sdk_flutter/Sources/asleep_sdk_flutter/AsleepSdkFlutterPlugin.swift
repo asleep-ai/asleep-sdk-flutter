@@ -52,6 +52,15 @@ struct TrackingStartRecoveryGate {
   }
 }
 
+func trackingFailureTerminatesSession(_ error: Asleep.AsleepError) -> Bool {
+  switch error {
+  case .stopTrackingNetworkFail, .uploadTrackingTerminated, .interruptionRecoveryFailed:
+    return true
+  default:
+    return false
+  }
+}
+
 public final class AsleepSdkFlutterPlugin: NSObject, FlutterPlugin {
   private let events = IosEventsStreamHandler()
   private lazy var hostApi = IosAsleepHostApi(events: events)
@@ -709,11 +718,9 @@ extension IosAsleepHostApi: AsleepSleepTrackingManagerDelegate {
   func didFail(error: Asleep.AsleepError) {
     guard !detached else { return }
     activeTrackingStartGeneration = nil
-    switch error {
-    case .uploadTrackingTerminated, .interruptionRecoveryFailed:
+    if trackingFailureTerminatesSession(error) {
+      trackingStartRecoveryGate.didTerminate()
       trackingActive = false
-    default:
-      break
     }
     emit(
       "onTrackingFailed",

@@ -28,6 +28,7 @@ import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.PluginRegistry
 
 internal const val TRACKING_START_TIMEOUT_MILLIS = 30_000L
+internal const val INITIALIZATION_TIMEOUT_MILLIS = 30_000L
 
 internal val TERMINAL_TRACKING_ERROR_CODES =
     setOf(
@@ -143,6 +144,87 @@ internal class TrackingStartCoordinator(
         timeout = null
         currentCallback(result)
         return true
+    }
+}
+
+internal class InitializationCoordinator(
+    private val operation: String,
+    private val schedule: (Runnable, Long) -> Unit,
+    private val cancel: (Runnable) -> Unit,
+    private val onTimeout: () -> Unit = {},
+) {
+    private var callback: ((Result<Unit>) -> Unit)? = null
+    private var timeout: Runnable? = null
+    private var nextAttempt = 0L
+    private var activeAttempt: Long? = null
+
+    fun begin(callback: (Result<Unit>) -> Unit): Long? {
+        if (activeAttempt != null) return null
+        val attempt = ++nextAttempt
+        activeAttempt = attempt
+        this.callback = callback
+        scheduleTimeout(attempt)
+        return attempt
+    }
+
+    fun refreshTimeout(attempt: Long): Boolean {
+        if (!isAwaiting(attempt)) return false
+        timeout?.let(cancel)
+        scheduleTimeout(attempt)
+        return true
+    }
+
+    fun isAwaiting(attempt: Long): Boolean =
+        activeAttempt == attempt && callback != null
+
+    fun finish(attempt: Long, result: Result<Unit>): Boolean {
+        if (activeAttempt != attempt) return false
+        val currentCallback = callback
+        clear()
+        currentCallback?.invoke(result)
+        return currentCallback != null
+    }
+
+    fun failWaiter(error: Throwable) {
+        val currentCallback = callback
+        timeout?.let(cancel)
+        timeout = null
+        callback = null
+        // Keep activeAttempt quarantined until its native listener terminates.
+        currentCallback?.invoke(Result.failure(error))
+    }
+
+    val isBusy: Boolean
+        get() = activeAttempt != null
+
+    private fun scheduleTimeout(attempt: Long) {
+        val timeout =
+            Runnable {
+                if (!isAwaiting(attempt)) return@Runnable
+                val currentCallback = callback
+                // The native SDK has one process-global listener and no cancellation API.
+                // Fail the Dart waiter, but keep this attempt active to prevent overlap.
+                callback = null
+                this.timeout = null
+                onTimeout()
+                currentCallback?.invoke(
+                    Result.failure(
+                        FlutterError(
+                            code = "INITIALIZATION_TIMEOUT",
+                            message = "The native Asleep SDK did not complete $operation",
+                        ),
+                    ),
+                )
+            }
+        this.timeout = timeout
+        schedule(timeout, INITIALIZATION_TIMEOUT_MILLIS)
+    }
+
+    private fun clear() {
+        timeout?.let(cancel)
+        timeout = null
+        callback = null
+        activeAttempt = null
     }
 }
 
@@ -337,13 +419,30 @@ private class AndroidAsleepHostApi(
     private var reports: Reports? = null
     @Volatile
     private var loggingEnabled = false
-    private var setupCallback: ((Result<Unit>) -> Unit)? = null
-    private var configureCallback: ((Result<Unit>) -> Unit)? = null
     private var permissionCallback: ((Result<Boolean>) -> Unit)? = null
-    private var setupInFlight = false
-    private var configureInFlight = false
     private var detached = false
     private var startRecoveryRequired = false
+    private val setupCoordinator =
+        InitializationCoordinator(
+            operation = "setup",
+            schedule = mainHandler::postDelayed,
+            cancel = mainHandler::removeCallbacks,
+            onTimeout = {
+                emit(
+                    "onSetupDidFail",
+                    mapOf(
+                        "code" to "INITIALIZATION_TIMEOUT",
+                        "message" to "The native Asleep SDK did not complete setup",
+                    ),
+                )
+            },
+        )
+    private val configureCoordinator =
+        InitializationCoordinator(
+            operation = "configuration",
+            schedule = mainHandler::postDelayed,
+            cancel = mainHandler::removeCallbacks,
+        )
     private val trackingStartCoordinator =
         TrackingStartCoordinator(
             schedule = mainHandler::postDelayed,
@@ -367,12 +466,11 @@ private class AndroidAsleepHostApi(
 
     override fun setup(message: SetupMessage, callback: (Result<Unit>) -> Unit) {
         if (!claimNativeSdk(callback)) return
-        if (setupCallback != null || configureCallback != null) {
+        if (setupCoordinator.isBusy || configureCoordinator.isBusy) {
             callback(Result.failure(IllegalStateException("Setup or configuration is already in progress")))
             return
         }
-        setupCallback = callback
-        setupInFlight = true
+        val attempt = setupCoordinator.begin(callback) ?: return
         try {
             Asleep.setup(
                 context = context,
@@ -384,35 +482,41 @@ private class AndroidAsleepHostApi(
                 asleepLogger = nativeLogger,
                 asleepSetupListener = object : Asleep.AsleepSetupListener {
                     override fun onComplete() {
-                        if (setupCallback == null) return
-                        configureAfterSetup(message)
+                        if (!setupCoordinator.isAwaiting(attempt)) {
+                            finishSetup(attempt, Result.success(Unit))
+                            return
+                        }
+                        setupCoordinator.refreshTimeout(attempt)
+                        configureAfterSetup(message, attempt)
                     }
 
                     override fun onProgress(progress: Int) {
-                        if (setupCallback == null) return
+                        if (!setupCoordinator.isAwaiting(attempt)) return
                         emit("onSetupInProgress", mapOf("progress" to progress))
                     }
 
                     override fun onFail(errorCode: Int, detail: String) {
-                        if (setupCallback == null) return
+                        if (!setupCoordinator.isAwaiting(attempt)) {
+                            finishSetup(attempt, Result.failure(nativeSdkError(errorCode, detail)))
+                            return
+                        }
                         emit("onSetupDidFail", errorPayload(errorCode, detail, "SETUP_FAILED"))
-                        finishSetup(Result.failure(nativeSdkError(errorCode, detail)))
+                        finishSetup(attempt, Result.failure(nativeSdkError(errorCode, detail)))
                     }
                 },
             )
         } catch (error: Throwable) {
-            finishSetup(Result.failure(error))
+            finishSetup(attempt, Result.failure(error))
         }
     }
 
     override fun configure(message: ConfigurationMessage, callback: (Result<Unit>) -> Unit) {
         if (!claimNativeSdk(callback)) return
-        if (setupCallback != null || configureCallback != null) {
+        if (setupCoordinator.isBusy || configureCoordinator.isBusy) {
             callback(Result.failure(IllegalStateException("Configuration is already in progress")))
             return
         }
-        configureCallback = callback
-        configureInFlight = true
+        val attempt = configureCoordinator.begin(callback) ?: return
         try {
             Asleep.initAsleepConfig(
                 context = context,
@@ -424,9 +528,15 @@ private class AndroidAsleepHostApi(
                 asleepLogger = nativeLogger,
                 asleepConfigListener = object : Asleep.AsleepConfigListener {
                     override fun onSuccess(userId: String?, asleepConfig: AsleepConfig?) {
-                        if (configureCallback == null) return
+                        if (!configureCoordinator.isAwaiting(attempt)) {
+                            finishConfigure(attempt, Result.success(Unit))
+                            return
+                        }
                         if (asleepConfig == null) {
-                            finishConfigure(Result.failure(IllegalStateException("Native AsleepConfig is null")))
+                            finishConfigure(
+                                attempt,
+                                Result.failure(IllegalStateException("Native AsleepConfig is null")),
+                            )
                             return
                         }
                         this@AndroidAsleepHostApi.asleepConfig = asleepConfig
@@ -434,21 +544,24 @@ private class AndroidAsleepHostApi(
                         userId
                             ?.takeIf(String::isNotEmpty)
                             ?.let { emit("onUserJoined", mapOf("userId" to it)) }
-                        finishConfigure(Result.success(Unit))
+                        finishConfigure(attempt, Result.success(Unit))
                     }
 
                     override fun onFail(errorCode: Int, detail: String) {
-                        if (configureCallback == null) return
+                        if (!configureCoordinator.isAwaiting(attempt)) {
+                            finishConfigure(attempt, Result.failure(nativeSdkError(errorCode, detail)))
+                            return
+                        }
                         emit(
                             "onUserJoinFailed",
                             errorPayload(errorCode, detail, "INITIALIZATION_FAILED"),
                         )
-                        finishConfigure(Result.failure(nativeSdkError(errorCode, detail)))
+                        finishConfigure(attempt, Result.failure(nativeSdkError(errorCode, detail)))
                     }
                 },
             )
         } catch (error: Throwable) {
-            finishConfigure(Result.failure(error))
+            finishConfigure(attempt, Result.failure(error))
         }
     }
 
@@ -457,6 +570,16 @@ private class AndroidAsleepHostApi(
         // initialization so Android 3.2.1 can bind to a surviving service
         // before setup/configure assigns its process-global context.
         if (!claimNativeSdk(callback)) return
+        if (setupCoordinator.isBusy || configureCoordinator.isBusy) {
+            callback(
+                Result.failure(
+                    IllegalStateException(
+                        "Setup or configuration is still awaiting native completion",
+                    ),
+                ),
+            )
+            return
+        }
         try {
             val active = trackingRestorer.restore()
             if (!active) {
@@ -781,12 +904,9 @@ private class AndroidAsleepHostApi(
 
     fun detach() {
         detached = true
-        setupCallback?.invoke(Result.failure(IllegalStateException("Flutter engine detached")))
-        setupCallback = null
-        setupInFlight = false
-        configureCallback?.invoke(Result.failure(IllegalStateException("Flutter engine detached")))
-        configureCallback = null
-        configureInFlight = false
+        val detachError = IllegalStateException("Flutter engine detached")
+        setupCoordinator.failWaiter(detachError)
+        configureCoordinator.failWaiter(detachError)
         permissionCallback?.invoke(Result.failure(IllegalStateException("Flutter engine detached")))
         permissionCallback = null
         trackingStartCoordinator.failCurrent(IllegalStateException("Flutter engine detached"))
@@ -881,14 +1001,12 @@ private class AndroidAsleepHostApi(
     private fun isPermissionGranted(permission: String): Boolean =
         ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
-    private fun finishConfigure(result: Result<Unit>) {
-        configureCallback?.invoke(result)
-        configureCallback = null
-        configureInFlight = false
+    private fun finishConfigure(attempt: Long, result: Result<Unit>) {
+        configureCoordinator.finish(attempt, result)
         releaseNativeSdkIfIdle()
     }
 
-    private fun configureAfterSetup(message: SetupMessage) {
+    private fun configureAfterSetup(message: SetupMessage, attempt: Long) {
         try {
             Asleep.initAsleepConfig(
                 context = context,
@@ -900,7 +1018,10 @@ private class AndroidAsleepHostApi(
                 asleepLogger = nativeLogger,
                 asleepConfigListener = object : Asleep.AsleepConfigListener {
                     override fun onSuccess(userId: String?, asleepConfig: AsleepConfig?) {
-                        if (setupCallback == null) return
+                        if (!setupCoordinator.isAwaiting(attempt)) {
+                            finishSetup(attempt, Result.success(Unit))
+                            return
+                        }
                         if (asleepConfig == null) {
                             val error = IllegalStateException("Native AsleepConfig is null after setup")
                             emit(
@@ -910,7 +1031,7 @@ private class AndroidAsleepHostApi(
                                     "message" to error.message,
                                 ),
                             )
-                            finishSetup(Result.failure(error))
+                            finishSetup(attempt, Result.failure(error))
                             return
                         }
                         this@AndroidAsleepHostApi.asleepConfig = asleepConfig
@@ -919,15 +1040,18 @@ private class AndroidAsleepHostApi(
                             emit("onUserJoined", mapOf("userId" to userId))
                         }
                         emit("onSetupDidComplete")
-                        finishSetup(Result.success(Unit))
+                        finishSetup(attempt, Result.success(Unit))
                     }
 
                     override fun onFail(errorCode: Int, detail: String) {
-                        if (setupCallback == null) return
+                        if (!setupCoordinator.isAwaiting(attempt)) {
+                            finishSetup(attempt, Result.failure(nativeSdkError(errorCode, detail)))
+                            return
+                        }
                         val payload = errorPayload(errorCode, detail, "INIT_CONFIG_FAILED")
                         emit("onUserJoinFailed", payload)
                         emit("onSetupDidFail", payload)
-                        finishSetup(Result.failure(nativeSdkError(errorCode, detail)))
+                        finishSetup(attempt, Result.failure(nativeSdkError(errorCode, detail)))
                     }
                 },
             )
@@ -939,14 +1063,12 @@ private class AndroidAsleepHostApi(
                     "message" to (error.message ?: "Configuration after setup failed"),
                 ),
             )
-            finishSetup(Result.failure(error))
+            finishSetup(attempt, Result.failure(error))
         }
     }
 
-    private fun finishSetup(result: Result<Unit>) {
-        setupCallback?.invoke(result)
-        setupCallback = null
-        setupInFlight = false
+    private fun finishSetup(attempt: Long, result: Result<Unit>) {
+        setupCoordinator.finish(attempt, result)
         releaseNativeSdkIfIdle()
     }
 
@@ -975,7 +1097,7 @@ private class AndroidAsleepHostApi(
     }
 
     private fun releaseNativeSdkIfIdle() {
-        if (detached && !setupInFlight && !configureInFlight) {
+        if (detached && !setupCoordinator.isBusy && !configureCoordinator.isBusy) {
             NativeSdkOwnerRegistry.release(this)
         }
     }

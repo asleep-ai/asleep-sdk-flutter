@@ -22,4 +22,24 @@ class RunnerTests: XCTestCase {
     XCTAssertTrue(gate.canStart)
     XCTAssertTrue(gate.acceptsCreatedSession)
   }
+
+  func testTrackingFailuresClassifyOnlyDefinitiveTerminationPaths() {
+    XCTAssertTrue(
+      trackingFailureTerminatesSession(
+        .stopTrackingNetworkFail(code: -9999, message: nil)
+      )
+    )
+    XCTAssertTrue(
+      trackingFailureTerminatesSession(
+        .uploadTrackingTerminated(message: nil)
+      )
+    )
+    XCTAssertTrue(
+      trackingFailureTerminatesSession(
+        .interruptionRecoveryFailed(attemptsCount: 3)
+      )
+    )
+    XCTAssertFalse(trackingFailureTerminatesSession(.audioInitializationFailed))
+    XCTAssertFalse(trackingFailureTerminatesSession(.cannotActivateInBackground))
+  }
 }
