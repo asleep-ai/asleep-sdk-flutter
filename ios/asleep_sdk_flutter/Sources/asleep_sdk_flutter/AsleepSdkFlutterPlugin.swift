@@ -71,11 +71,21 @@ private final class IosEventsStreamHandler: EventsStreamHandler {
     sink = nil
   }
 
-  func emit(type: String, payloadJson: String) {
-    DispatchQueue.main.async { [weak self] in
+  func emit(
+    type: String,
+    payloadJson: String,
+    completion: (() -> Void)? = nil
+  ) {
+    let deliver = { [weak self] in
       self?.sink?.success(
         NativeEventMessage(type: type, payloadJson: payloadJson)
       )
+      completion?()
+    }
+    if Thread.isMainThread {
+      deliver()
+    } else {
+      DispatchQueue.main.async(execute: deliver)
     }
   }
 
@@ -94,10 +104,15 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
   private var config: Asleep.Config?
   private var setupCompletion: ((Result<Void, Error>) -> Void)?
   private var setupMessage: SetupMessage?
+  private var setupBaseURL: URL?
+  private var setupCallbackURL: URL?
   private var configuringFromSetup = false
   private var configureCompletion: ((Result<Void, Error>) -> Void)?
   private var loggingEnabled = false
   private var initializationInFlight = false
+  private var trackingActive = false
+  private var trackingStartCompletion: ((Result<Void, Error>) -> Void)?
+  private var trackingStartTimeout: DispatchWorkItem?
   private var detached = false
 
   init(events: IosEventsStreamHandler) {
@@ -108,6 +123,15 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
     message: SetupMessage,
     completion: @escaping (Result<Void, Error>) -> Void
   ) {
+    let baseURL: URL?
+    let callbackURL: URL?
+    do {
+      baseURL = try validatedURL(message.baseUrl, field: "baseUrl")
+      callbackURL = try validatedURL(message.callbackUrl, field: "callbackUrl")
+    } catch {
+      completion(.failure(error))
+      return
+    }
     guard claimNativeSdk(completion) else { return }
     guard setupCompletion == nil, configureCompletion == nil else {
       completion(.failure(BridgeError.configurationInProgress))
@@ -115,12 +139,14 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
     }
     setupCompletion = completion
     setupMessage = message
+    setupBaseURL = baseURL
+    setupCallbackURL = callbackURL
     initializationInFlight = true
     Asleep.setLogger(self)
     Asleep.setup(
       apiKey: message.apiKey,
-      baseUrl: optionalURL(message.baseUrl),
-      callbackUrl: optionalURL(message.callbackUrl),
+      baseUrl: baseURL,
+      callbackUrl: callbackURL,
       service: message.service,
       enableODA: message.enableOnDeviceAnalysis,
       delegate: self
@@ -131,6 +157,15 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
     message: ConfigurationMessage,
     completion: @escaping (Result<Void, Error>) -> Void
   ) {
+    let baseURL: URL?
+    let callbackURL: URL?
+    do {
+      baseURL = try validatedURL(message.baseUrl, field: "baseUrl")
+      callbackURL = try validatedURL(message.callbackUrl, field: "callbackUrl")
+    } catch {
+      completion(.failure(error))
+      return
+    }
     guard claimNativeSdk(completion) else { return }
     guard setupCompletion == nil, configureCompletion == nil else {
       completion(.failure(BridgeError.configurationInProgress))
@@ -142,8 +177,8 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
     Asleep.initAsleepConfig(
       apiKey: message.apiKey,
       userId: message.userId,
-      baseUrl: optionalURL(message.baseUrl),
-      callbackUrl: optionalURL(message.callbackUrl),
+      baseUrl: baseURL,
+      callbackUrl: callbackURL,
       delegate: self
     )
   }
@@ -151,8 +186,10 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
   func checkAndRestoreTracking(
     completion: @escaping (Result<RestoreMessage, Error>) -> Void
   ) {
-    let hasActiveSession = trackingManager?.getTrackingStatus().sessionId != nil
-    completion(.success(RestoreMessage(hasActiveSession: hasActiveSession)))
+    // Match the React Native contract: iOS has no persistent foreground
+    // service to reconnect after process death. A session identifier is not an
+    // active-state signal because AsleepSDK also retains it after close.
+    completion(.success(RestoreMessage(hasActiveSession: false)))
   }
 
   func checkBatteryOptimization(
@@ -202,6 +239,10 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
       completion(.failure(BridgeError.trackingManagerUnavailable))
       return
     }
+    guard trackingStartCompletion == nil else {
+      completion(.failure(BridgeError.trackingStartInProgress))
+      return
+    }
     var options: AVAudioSession.CategoryOptions = []
     for option in message.iosAudioSessionOptions {
       switch option {
@@ -215,8 +256,13 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
         options.insert(.allowBluetoothA2DP)
       }
     }
+    trackingStartCompletion = completion
+    let timeout = DispatchWorkItem { [weak self] in
+      self?.finishTrackingStart(.failure(BridgeError.trackingStartTimeout))
+    }
+    trackingStartTimeout = timeout
+    DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: timeout)
     trackingManager.startTracking(additionalAudioSessionOptions: options)
-    completion(.success(()))
   }
 
   func resumeTracking(completion: @escaping (Result<Void, Error>) -> Void) {
@@ -235,6 +281,7 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
       completion(.failure(BridgeError.trackingManagerUnavailable))
       return
     }
+    finishTrackingStart(.failure(BridgeError.trackingStartCancelled))
     trackingManager.stopTracking()
     completion(.success(()))
   }
@@ -243,6 +290,10 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
     completion: @escaping (Result<AnalysisRequestMessage, Error>) -> Void
   ) {
     guard requireNativeSdkOwner(completion) else { return }
+    guard trackingActive else {
+      completion(.failure(BridgeError.trackingNotActive))
+      return
+    }
     guard let trackingManager else {
       completion(.failure(BridgeError.trackingManagerUnavailable))
       return
@@ -273,7 +324,7 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
         let report = try await reportManager.report(sessionId: sessionId)
         completion(.success(try encodeJSON(report)))
       } catch {
-        completion(.failure(error))
+        completion(.failure(transportError(error)))
       }
     }
   }
@@ -290,14 +341,23 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
     }
     Task {
       do {
-        let sessions = try await reportManager.reports(
-          fromDate: fromDate,
-          toDate: toDate,
-          limit: 100
-        )
+        let pageSize = 100
+        var offset = 0
+        var sessions: [Asleep.Model.SleepSession] = []
+        while true {
+          let page = try await reportManager.reports(
+            fromDate: fromDate,
+            toDate: toDate,
+            offset: offset,
+            limit: pageSize
+          )
+          sessions.append(contentsOf: page)
+          guard page.count == pageSize else { break }
+          offset += page.count
+        }
         completion(.success(try sessions.map(encodeSleepSession)))
       } catch {
-        completion(.failure(error))
+        completion(.failure(transportError(error)))
       }
     }
   }
@@ -320,7 +380,7 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
         )
         completion(.success(try encodeJSON(report)))
       } catch {
-        completion(.failure(error))
+        completion(.failure(transportError(error)))
       }
     }
   }
@@ -339,7 +399,7 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
         try await reportManager.deleteReport(sessionId: sessionId)
         completion(.success(()))
       } catch {
-        completion(.failure(error))
+        completion(.failure(transportError(error)))
       }
     }
   }
@@ -357,12 +417,16 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
     setupCompletion?(.failure(BridgeError.engineDetached))
     setupCompletion = nil
     setupMessage = nil
+    setupBaseURL = nil
+    setupCallbackURL = nil
     configuringFromSetup = false
     configureCompletion?(.failure(BridgeError.engineDetached))
     configureCompletion = nil
+    finishTrackingStart(.failure(BridgeError.engineDetached))
     trackingManager = nil
     reportManager = nil
     config = nil
+    trackingActive = false
     releaseNativeSdkIfIdle()
   }
 
@@ -371,6 +435,14 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
     configureCompletion = nil
     initializationInFlight = false
     releaseNativeSdkIfIdle()
+  }
+
+  private func finishTrackingStart(_ result: Result<Void, Error>) {
+    guard let completion = trackingStartCompletion else { return }
+    trackingStartCompletion = nil
+    trackingStartTimeout?.cancel()
+    trackingStartTimeout = nil
+    completion(result)
   }
 
   private func claimNativeSdk<T>(
@@ -399,16 +471,21 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
     }
   }
 
-  private func emit(_ type: String, _ payload: [String: Any] = [:]) {
+  private func emit(
+    _ type: String,
+    _ payload: [String: Any] = [:],
+    completion: (() -> Void)? = nil
+  ) {
     do {
       let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
       events.emit(
         type: type,
-        payloadJson: String(decoding: data, as: UTF8.self)
+        payloadJson: String(decoding: data, as: UTF8.self),
+        completion: completion
       )
     } catch {
       let fallback = #"{"message":"Failed to encode native event"}"#
-      events.emit(type: "onDebugLog", payloadJson: fallback)
+      events.emit(type: "onDebugLog", payloadJson: fallback, completion: completion)
     }
   }
 
@@ -482,20 +559,26 @@ extension IosAsleepHostApi: AsleepSetupDelegate {
     setupCompletion = nil
     configuringFromSetup = true
     configureCompletion = completion
+    let baseURL = setupBaseURL
+    let callbackURL = setupCallbackURL
+    setupBaseURL = nil
+    setupCallbackURL = nil
     Asleep.initAsleepConfig(
       apiKey: message.apiKey,
       userId: nil,
-      baseUrl: optionalURL(message.baseUrl),
-      callbackUrl: optionalURL(message.callbackUrl),
+      baseUrl: baseURL,
+      callbackUrl: callbackURL,
       delegate: self
     )
   }
 
   func setupDidFail(error: Asleep.AsleepError) {
     emit("onSetupDidFail", errorPayload(error, fallbackCode: "SETUP_FAILED"))
-    setupCompletion?(.failure(error))
+    setupCompletion?(.failure(transportError(error)))
     setupCompletion = nil
     setupMessage = nil
+    setupBaseURL = nil
+    setupCallbackURL = nil
     initializationInFlight = false
     releaseNativeSdkIfIdle()
   }
@@ -527,7 +610,7 @@ extension IosAsleepHostApi: AsleepConfigDelegate {
       configuringFromSetup = false
       emit("onSetupDidFail", errorPayload(error, fallbackCode: "INIT_CONFIG_FAILED"))
     }
-    finishConfiguration(.failure(error))
+    finishConfiguration(.failure(transportError(error)))
   }
 
   func userDidDelete(userId: String) {
@@ -537,7 +620,10 @@ extension IosAsleepHostApi: AsleepConfigDelegate {
 
 extension IosAsleepHostApi: AsleepSleepTrackingManagerDelegate {
   func didCreate() {
-    resolveSessionId(retriesRemaining: 5)
+    trackingActive = true
+    resolveSessionId(retriesRemaining: 5) { [weak self] in
+      self?.finishTrackingStart(.success(()))
+    }
   }
 
   func didUpload(sequence: Int) {
@@ -545,14 +631,24 @@ extension IosAsleepHostApi: AsleepSleepTrackingManagerDelegate {
   }
 
   func didClose(sessionId: String) {
+    trackingActive = false
+    finishTrackingStart(.failure(BridgeError.trackingClosedBeforeStart))
     emit("onTrackingClosed", ["sessionId": sessionId])
   }
 
   func didFail(error: Asleep.AsleepError) {
+    switch error {
+    case .uploadTrackingTerminated, .interruptionRecoveryFailed:
+      trackingActive = false
+    default:
+      break
+    }
     emit(
       "onTrackingFailed",
       errorPayload(error, fallbackCode: "TRACKING_FAILED")
-    )
+    ) { [weak self] in
+      self?.finishTrackingStart(.failure(transportError(error)))
+    }
   }
 
   func didInterrupt() {
@@ -564,7 +660,9 @@ extension IosAsleepHostApi: AsleepSleepTrackingManagerDelegate {
   }
 
   func micPermissionWasDenied() {
-    emit("onMicPermissionDenied")
+    emit("onMicPermissionDenied") { [weak self] in
+      self?.finishTrackingStart(.failure(BridgeError.microphonePermissionDenied))
+    }
   }
 
   func analysing(session: Asleep.Model.Session) {
@@ -575,17 +673,23 @@ extension IosAsleepHostApi: AsleepSleepTrackingManagerDelegate {
     }
   }
 
-  private func resolveSessionId(retriesRemaining: Int) {
+  private func resolveSessionId(
+    retriesRemaining: Int,
+    completion: @escaping () -> Void
+  ) {
     if let sessionId = trackingManager?.getTrackingStatus().sessionId {
-      emit("onTrackingCreated", ["sessionId": sessionId])
+      emit("onTrackingCreated", ["sessionId": sessionId], completion: completion)
       return
     }
     guard retriesRemaining > 0 else {
-      emit("onTrackingCreated")
+      emit("onTrackingCreated", completion: completion)
       return
     }
-    DispatchQueue.global().asyncAfter(deadline: .now() + 1) { [weak self] in
-      self?.resolveSessionId(retriesRemaining: retriesRemaining - 1)
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+      self?.resolveSessionId(
+        retriesRemaining: retriesRemaining - 1,
+        completion: completion
+      )
     }
   }
 }
@@ -619,8 +723,15 @@ private enum BridgeError: LocalizedError {
   case anotherEngineOwnsNativeSdk
   case nativeSdkNotOwned
   case trackingManagerUnavailable
+  case trackingNotActive
+  case trackingStartInProgress
+  case trackingStartTimeout
+  case trackingStartCancelled
+  case trackingClosedBeforeStart
+  case microphonePermissionDenied
   case reportManagerUnavailable
   case engineDetached
+  case invalidURL(field: String, value: String)
 
   var errorDescription: String? {
     switch self {
@@ -632,17 +743,54 @@ private enum BridgeError: LocalizedError {
       return "This Flutter engine does not own the Asleep native SDK; initialize it first"
     case .trackingManagerUnavailable:
       return "Tracking manager is not initialized"
+    case .trackingNotActive:
+      return "Sleep tracking is not active"
+    case .trackingStartInProgress:
+      return "Tracking start is already in progress"
+    case .trackingStartTimeout:
+      return "The native Asleep SDK did not acknowledge tracking start"
+    case .trackingStartCancelled:
+      return "Tracking start was cancelled by stopTracking"
+    case .trackingClosedBeforeStart:
+      return "Tracking closed before the native SDK acknowledged its start"
+    case .microphonePermissionDenied:
+      return "Microphone permission was denied"
     case .reportManagerUnavailable:
       return "Report manager is not initialized"
     case .engineDetached:
       return "Flutter engine detached"
+    case .invalidURL(let field, let value):
+      return "\(field) must be an absolute HTTP or HTTPS URL: \(value)"
     }
   }
 }
 
-private func optionalURL(_ value: String?) -> URL? {
+private func validatedURL(_ value: String?, field: String) throws -> URL? {
   guard let value, !value.isEmpty else { return nil }
-  return URL(string: value)
+  guard
+    let components = URLComponents(string: value),
+    let scheme = components.scheme?.lowercased(),
+    scheme == "http" || scheme == "https",
+    components.host?.isEmpty == false,
+    let url = components.url
+  else {
+    throw BridgeError.invalidURL(field: field, value: value)
+  }
+  return url
+}
+
+private func transportError(_ error: Error) -> Error {
+  guard let asleepError = error as? Asleep.AsleepError else { return error }
+  let details: [String: any Sendable] = [
+    "sdkCode": asleepError.errorCode.code,
+    "caseName": String(describing: asleepError),
+    "platform": "ios",
+  ]
+  return PigeonError(
+    code: "ASLEEP_SDK_ERROR",
+    message: asleepError.description,
+    details: details
+  )
 }
 
 private func encodeJSON<T: Encodable>(_ value: T) throws -> String {

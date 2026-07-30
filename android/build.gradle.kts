@@ -80,3 +80,23 @@ dependencies {
     testImplementation("org.jetbrains.kotlin:kotlin-test")
     testImplementation("org.mockito:mockito-core:5.0.0")
 }
+
+val verifyLibraryManifestPolicy by tasks.registering {
+    val manifestFile = layout.projectDirectory.file("src/main/AndroidManifest.xml")
+    inputs.file(manifestFile)
+
+    doLast {
+        check(
+            "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" !in
+                manifestFile.asFile.readText(),
+        ) {
+            "The Flutter library must not force battery-optimization exemption into consumer manifests"
+        }
+    }
+}
+
+tasks.configureEach {
+    if (name.startsWith("test") && name.endsWith("UnitTest")) {
+        dependsOn(verifyLibraryManifestPolicy)
+    }
+}

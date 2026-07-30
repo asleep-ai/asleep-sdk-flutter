@@ -1,5 +1,5 @@
 PODS:
-  - asleep_sdk_flutter (0.1.0-dev.1):
+  - asleep_sdk_flutter (0.1.0):
     - AsleepSDK (= 3.2.0)
     - Flutter
   - AsleepSDK (3.2.0)
@@ -20,7 +20,7 @@ EXTERNAL SOURCES:
     :path: Flutter
 
 SPEC CHECKSUMS:
-  asleep_sdk_flutter: 83a164aeb87e78f939bb25db825bd869e6290509
+  asleep_sdk_flutter: 0743109a4255f435445abb50b51043becda2e0d8
   AsleepSDK: 7dd69125875be3e028bd5274aa6edebbb6f1a5fd
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
 

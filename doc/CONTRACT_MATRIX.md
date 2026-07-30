@@ -1,6 +1,6 @@
 # Asleep Flutter SDK Contract Matrix
 
-Verified on: 2026-07-29
+Verified on: 2026-07-30
 
 ## Contract Baselines
 
@@ -22,8 +22,10 @@ React-specific hook:
 
 1. Create one `AsleepClient`.
 2. Call `initialize(AsleepSetupOptions)` for setup/ODA, or
-   `configure(AsleepConfiguration)` for normal configuration.
-3. Call `checkAndRestoreTracking()` at application startup.
+   `configure(AsleepConfiguration)` for normal configuration. Both paths run a
+   restoration preflight before native setup/configuration.
+3. Call `checkAndRestoreTracking()` to complete the explicit prerequisite check
+   before starting a new session.
 4. Call `checkBatteryOptimization()`.
 5. Call `hasRequiredPermissions()` without showing UI.
 6. From a user-initiated flow, call `requestRequiredPermissions()` if required.
@@ -44,22 +46,22 @@ analytics, wall-clock tracking duration, and product-specific state management.
 
 | Flutter command | React Native v1.2 contract | Android native contract | iOS native contract | Flutter contract |
 |---|---|---|---|---|
-| `initialize(options)` | `setup(apiKey, baseUrl?, callbackUrl?, service?, enableODA?)` | Setup listener emits progress, completion, or numeric failure. Android 3.3 additionally has an app ID/app secret overload; it is not exposed in this initial Flutter surface. | `Asleep.setup` takes the same API-key fields and a delegate. | Completes only after setup and native configuration managers are ready. Progress and the authoritative projected lifecycle remain available through `SetupCompletedEvent` and `state.setupStatus`. |
-| `configure(configuration)` | `initAsleepConfig(apiKey, userId?, baseUrl?, callbackUrl?)` | Callback returns `userId` and `AsleepConfig`; the wrapper creates reports from the config. | Delegate returns `userId` and `Asleep.Config`; the wrapper creates tracking and report managers. | Returns `Future<void>`; joined user identity is delivered through `UserJoinedEvent` and state. |
-| `checkAndRestoreTracking()` | Probe service, reconnect only on Android, return `{hasActiveSession}`. | `isSleepTrackingAlive(context)` plus `connectSleepTracking(listener)` reconnects to the foreground-service process. | No persistent Android-style service; the RN wrapper returns `false`. | Returns `RestoreResult`. A true result projects `TrackingStatus.tracking`. |
+| `initialize(options)` | `setup(apiKey, baseUrl?, callbackUrl?, service?, enableODA?)` | Setup listener emits progress, completion, or numeric failure. Android 3.3 additionally has an app ID/app secret overload; it is not exposed in this initial Flutter surface. | `Asleep.setup` takes the same API-key fields and a delegate. | Runs restoration preflight first, then completes only after setup and native configuration managers are ready. Progress and the authoritative projected lifecycle remain available through `SetupCompletedEvent` and `state.setupStatus`. |
+| `configure(configuration)` | `initAsleepConfig(apiKey, userId?, baseUrl?, callbackUrl?)` | Callback returns `userId` and `AsleepConfig`; the wrapper creates reports from the config. | Delegate returns `userId` and `Asleep.Config`; the wrapper creates tracking and report managers. | Runs restoration preflight first, then returns `Future<void>`; joined user identity is delivered through `UserJoinedEvent` and state. |
+| `checkAndRestoreTracking()` | Probe service, reconnect only on Android, return `{hasActiveSession}`. | The plugin probes `isSleepTrackingAlive(context)` when the engine attaches, before setup/configuration assigns the SDK context. Restore rechecks liveness and calls `connectSleepTracking(listener)` only while the service is alive. | The bridge returns `false`; a retained session ID is not accepted as proof of active tracking. | Returns `RestoreResult`. Only a verified Android survivor projects `TrackingStatus.tracking`. |
 | `checkBatteryOptimization()` | Required before start on both platforms for a uniform journey. | Uses `PowerManager.isIgnoringBatteryOptimizations`. | Not applicable. | Returns `BatteryOptimizationStatus`; iOS resolves `exempted: true`. |
 | `requestBatteryOptimizationExemption()` | Opens Android settings; iOS is a successful no-op. | Returns `true` when already exempt, `false` after opening settings. | Not applicable. | Returns `Future<bool>` with the same meaning. It does not wait for the user to change the setting. |
 | `hasRequiredPermissions()` | Non-interactive check. | Requires `RECORD_AUDIO`; API 34+ foreground microphone service requirements must also be satisfied. | Checks microphone recording permission. | Returns `Future<bool>` and never opens UI. |
 | `requestRequiredPermissions()` | Explicit request, separate from start. | Requests microphone permission. Android 13+ notification permission affects foreground-notification visibility, not whether audio tracking can run. | Requests microphone permission. | Returns whether tracking-required permission is granted. Notification denial must not be reported as microphone denial. |
-| `startTracking(options)` | Rejects missing prerequisites and permissions; does not request permission. | Starts foreground-service tracking with title, text, and icon notification options. | Starts the tracking manager with additional audio-session options. | Returns `Future<void>`; session identity and authoritative start are event-driven. |
+| `startTracking(options)` | Rejects missing prerequisites and permissions; does not request permission. | Starts foreground-service tracking with title, text, and icon notification options; the command completes on `onStart`, fails on `onFail`, and times out if the native SDK never acknowledges. | Starts the tracking manager with additional audio-session options. | Returns `Future<void>` only after native start acknowledgement; `TrackingCreatedEvent` carries the session identity. |
 | `resumeTracking()` | iOS-only foreground recovery command. | Unsupported. | Calls `SleepTrackingManager.resumeTracking()`. | Allowed only for `paused` or `recoveryRequired`; otherwise rejects with a typed exception. |
 | `stopTracking()` | Ends current tracking and eventually closes the session. | Calls `endSleepTracking`; close callback supplies session ID. | Calls `SleepTrackingManager.stopTracking()`. | Returns `Future<void>`; `TrackingClosedEvent` is the authoritative close signal. |
 | `requestAnalysis()` | Android may return a result immediately; iOS returns an acknowledgement and emits the result later. | `getCurrentSleepData` resolves a session and emits it. | `requestAnalysis()` is fire-and-event; the RN wrapper synthesizes `{status: requested, timestamp}`. | Returns `AnalysisRequest(status, timestamp?, immediateResult?)`; consumers must observe `AnalysisResultEvent` for the portable result path. |
 | `getReport(sessionId)` | Throws on failure or missing report; no null failure sentinel. | Callback returns serialized `Report`. | Async reports API returns an encodable report. | Returns typed `AsleepReport`; malformed or absent data rejects. |
-| `getReportList(fromDate, toDate)` | Empty list is valid; failures throw. Limit is 100 in the RN wrapper. | Callback returns `List<SleepSession>?`. | Async reports API returns `[SleepSession]`. | Returns `List<AsleepSession>` with normalized identifiers and dates. |
+| `getReportList(fromDate, toDate)` | Empty list is valid; failures throw. | Callback pages `List<SleepSession>?` with offset and limit. | Async reports API pages `[SleepSession]` with offset and limit. | Fetches successive pages until the first partial page, then returns the complete `List<AsleepSession>` with normalized identifiers and dates. |
 | `getAverageReport(fromDate, toDate)` | Throws on failure or absent payload. | Callback returns `AverageReport?`. | Async reports API returns encodable average report. | Returns typed `AsleepAverageReport`. |
 | `deleteSession(sessionId)` | Native success payloads are discarded. | Callback success may include a string/session ID. | Async delete returns no value. | Returns `Future<void>`. |
-| `setLoggingEnabled(enabled)` | Enables opt-in wrapper/native logs. | Wrapper logging is callback-based. | Logger forwarding is gated before crossing the bridge. | Returns `Future<void>`; debug text is exposed only through `DebugLogEvent`. |
+| `setLoggingEnabled(enabled)` | Enables opt-in wrapper/native logs. | The wrapper installs an `AsleepLogger` during setup/configuration and gates forwarding dynamically. | Logger forwarding is gated before crossing the bridge. | Returns `Future<void>`; debug text is exposed only through `DebugLogEvent`. |
 | `clearError()` | Clears the projected error only. | No native call. | No native call. | Synchronous state operation. |
 | `dispose()` | RN uses ref-counted listener teardown. | Detaches Flutter channel/event resources; must not stop tracking implicitly. | Detaches Flutter channel/event resources; must not stop tracking implicitly. | Idempotent. It closes client-owned streams and rejects subsequent commands. |
 
@@ -129,11 +131,16 @@ depend on Riverpod, Bloc, Signals, or another application state framework.
 
 ### Android
 
-- The application/library manifest needs internet, record-audio, foreground
-  service, foreground-service microphone, notification, and battery-exemption
-  declarations appropriate to the selected native artifact.
+- The library manifest declares internet, record-audio, foreground service,
+  foreground-service microphone, and notification permissions. Notification
+  grant affects visibility, not tracking permission.
+- Direct battery-optimization exemption is a consumer opt-in. The library does
+  not inject `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`; without that consumer
+  declaration the request method opens the general optimization settings.
 - Tracking runs in a foreground-service process and can survive an application
-  UI process restart. Restore must reconnect the listener.
+  UI process restart. The engine-attachment probe triggers Android 3.2.1's bind
+  path before setup changes its process-global context; restore then rechecks
+  liveness and reconnects the listener.
 - Notification title, text, and icon belong to each tracking start.
 - Battery exemption is a reliability prerequisite for an overnight session.
 - Android 3.3 adds token authentication, additional tracking overloads,
@@ -192,7 +199,7 @@ represent different platform facts.
 
 | Area | RN-bundled Android 3.2.1 | Current 3.3 source | Initial Flutter decision |
 |---|---|---|---|
-| Distribution baseline | Tagged `v3.2.1` | Source reports `3.3.0`, 69 commits after `v3.2.1`, no verified 3.3 release tag | Pinning remains blocked pending artifact decision |
+| Distribution baseline | Tagged `v3.2.1` | Source reports `3.3.0`, 69 commits after `v3.2.1`, no verified 3.3 release tag | Experimental 0.1.0 pins 3.2.1 |
 | Authentication | API key | API key plus app ID/app secret token flow | Expose API key only initially |
 | Tracking listener | Existing FGS listener | Adds completable listener/overloads | Preserve common lifecycle events only |
 | Completion | Close callback/report query | Optional COMPLETE polling, 30-second timeout, code `28000` | Do not imply completion polling until adopted explicitly |

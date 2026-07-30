@@ -58,6 +58,18 @@ void main() {
     expect(error.category, AsleepErrorCategory.terminal);
   });
 
+  test('Android upload exhaustion codes are transient', () {
+    for (final code in <int>[23000, 23500]) {
+      final error = AsleepError.fromJson(<String, Object?>{
+        'code': 'TRACKING_FAILED',
+        'message': 'Upload retry exhausted',
+        'sdkCode': code,
+      });
+
+      expect(error.category, AsleepErrorCategory.transient);
+    }
+  });
+
   test('report list aliases native session keys', () {
     final session = AsleepSession.fromJson(<String, Object?>{
       'session_id': 's1',
@@ -70,4 +82,107 @@ void main() {
     expect(session.startTime, DateTime.utc(2026, 7, 29));
     expect(session.createdTimezone, 'Asia/Seoul');
   });
+
+  test('session identifiers are never exposed as empty strings', () {
+    expect(
+      AsleepAnalysisResult.fromJson(<String, Object?>{'id': ''}).id,
+      isNull,
+    );
+    expect(
+      () => AsleepSession.fromJson(<String, Object?>{
+        'sessionId': '',
+        'sessionStartTime': '2026-07-29T00:00:00Z',
+        'createdTimezone': 'Asia/Seoul',
+        'state': 'COMPLETE',
+      }),
+      throwsA(malformedPayloadException),
+    );
+  });
+
+  test('invalid JSON syntax throws a typed malformed-payload error', () {
+    expect(
+      () => AsleepReport.fromJsonString('{'),
+      throwsA(malformedPayloadException),
+    );
+  });
+
+  test('wrong optional collection element types are rejected', () {
+    expect(
+      () => AsleepAnalysisResult.fromJson(<String, Object?>{
+        'sleepStages': <Object?>[1, 'two', 3],
+      }),
+      throwsA(malformedPayloadException),
+    );
+    expect(
+      () => AsleepAnalysisResult.fromJson(<String, Object?>{
+        'sleepStages': <Object?>[1.5],
+      }),
+      throwsA(malformedPayloadException),
+    );
+  });
+
+  test('invalid optional dates are rejected instead of treated as absent', () {
+    expect(
+      () => AsleepAnalysisResult.fromJson(<String, Object?>{
+        'startTime': 'not-a-date',
+      }),
+      throwsA(malformedPayloadException),
+    );
+  });
+
+  test('required report fields are never synthesized', () {
+    expect(
+      () => AsleepReport.fromJson(<String, Object?>{
+        'timezone': 'UTC',
+        'session': <String, Object?>{
+          'id': 'session-1',
+          'createdTimezone': 'UTC',
+          'startTime': '2026-07-29T00:00:00Z',
+          'state': 'COMPLETE',
+        },
+      }),
+      throwsA(malformedPayloadException),
+    );
+  });
+
+  test('decoded nested collections are immutable', () {
+    final result = AsleepAnalysisResult.fromJson(<String, Object?>{
+      'sleepStages': <int>[1, 2],
+    });
+    final error = AsleepError.fromJson(<String, Object?>{
+      'code': 'FUTURE_NATIVE_ERROR',
+      'message': 'New native error',
+      'nested': <String, Object?>{
+        'values': <Object?>[
+          1,
+          <String, Object?>{'name': 'value'},
+        ],
+      },
+    });
+
+    expect(() => result.sleepStages!.add(3), throwsUnsupportedError);
+    final nested = error.platformDetails['nested']! as Map<String, Object?>;
+    final values = nested['values']! as List<Object?>;
+    expect(() => nested['new'] = true, throwsUnsupportedError);
+    expect(() => values.add(2), throwsUnsupportedError);
+    expect(
+      () => (values[1]! as Map<String, Object?>)['name'] = 'changed',
+      throwsUnsupportedError,
+    );
+  });
+
+  test('public model constructors defensively copy list inputs', () {
+    final stages = <int>[1, 2];
+    final result = AsleepAnalysisResult(sleepStages: stages);
+    stages.add(3);
+
+    expect(result.sleepStages, <int>[1, 2]);
+    expect(() => result.sleepStages!.add(4), throwsUnsupportedError);
+  });
 }
+
+final Matcher malformedPayloadException = isA<AsleepException>().having(
+  (error) => error.code,
+  'code',
+  AsleepErrorCode.malformedPayload,
+);

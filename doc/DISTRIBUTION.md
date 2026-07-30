@@ -1,24 +1,31 @@
 # Distribution and release contract
 
-Verified on 2026-07-29 against the Dart, Flutter, pub.dev, and GitHub
+Verified on 2026-07-30 against the Dart, Flutter, pub.dev, and GitHub
 documentation linked below.
 
 ## Current safety boundary
 
 The GitHub repository is private. A pub.dev release is public even when its
 source repository is private: any pub user can download the package archive
-and its included source files. The package therefore keeps `publish_to: none`
-until Asleep explicitly approves public source distribution.
+and its included source files. The experimental 0.1.0 candidate is publishable,
+but no upload is authorized until the release owner confirms that the existing
+Asleep proprietary notice applies and approves the exact archive. `.pubignore`
+excludes internal `doc/` and Pigeon
+schema files; Dart, Kotlin, Swift, generated transport, and example sources
+remain public archive contents.
 
-On 2026-07-29, both the pub.dev package page and API endpoint for
+On 2026-07-30, the pub.dev API endpoint for
 `asleep_sdk_flutter` returned HTTP 404. This is evidence that no public package
 currently uses the name, not a reservation. Recheck immediately before the
-first publish.
+first publish. The verified `asleep.ai` publisher exists but owns no package
+until the first upload is completed and transferred.
 
 No workflow in this repository creates a tag. With the repository's default
 settings, the release workflow validates a candidate while its publish and
-GitHub Release jobs remain skipped. Those jobs require explicit repository
-variables before they can run.
+GitHub Release jobs remain skipped. A release tag must be signed, annotated, and
+point to a commit contained in `origin/main`; publishing also requires Dart,
+Android, and iOS release validation. Publish and GitHub Release jobs require
+explicit repository variables before they can run.
 
 ## Distribution choices
 
@@ -50,15 +57,15 @@ registry vendor and operational owner remain undecided.
 
 ## Public release prerequisites
 
-The release owner must resolve every item before removing `publish_to: none`:
+The release owner must resolve every item before the first upload:
 
-1. Approve public redistribution of all Dart, Kotlin, Swift, generated Pigeon,
-   documentation, and example source in the package archive.
-2. Replace the placeholder `LICENSE` with the approved license grant.
+1. Approve public redistribution of every Dart, Kotlin, Swift, generated
+   transport, and example source file in the package archive.
+2. Confirm that the proprietary `LICENSE` copied from the RN 1.2 package is
+   approved for this Flutter archive.
 3. Recheck that `asleep_sdk_flutter` is still unused on pub.dev.
-4. Decide whether the private GitHub repository URL should be exposed as
-   package metadata or whether a public documentation and issue URL will be
-   provided.
+4. Provide public source and issue URLs or keep both fields omitted. Do not
+   expose private GitHub URLs as broken public package metadata.
 5. Resolve the native Android Maven and iOS CocoaPods artifact access policy
    for external consumers.
 6. Confirm the supported Flutter, Dart, Android, iOS, Asleep Android SDK, and
@@ -84,7 +91,8 @@ After the first manual release:
    private repositories.
 5. Protect `v*` tags with a repository ruleset that restricts creation,
    updates, deletion, and bypass actors.
-6. Remove `publish_to: none` in the explicitly approved public release commit.
+6. Confirm the release commit contains the approved stable package version and
+   public archive.
 7. Set `PUBDEV_PUBLISH_ENABLED=true` only after the first manual publish and
    all preceding controls are complete.
 8. Set `RELEASE_CREATION_ENABLED=true` only after tag-triggered GitHub Releases
@@ -174,15 +182,16 @@ dart doc
 flutter pub outdated
 copy="$(mktemp -d)"
 git archive HEAD | tar -x -C "$copy"
-sed -i.bak '/^publish_to: none$/d' "$copy/pubspec.yaml"
-rm "$copy/pubspec.yaml.bak"
 (cd "$copy" && dart pub publish --dry-run)
 ```
 
 Run the verified latest pana version against a disposable copy because pana
 may modify the package. The release workflow pins pana 0.23.15 and rejects a
-score deficit greater than 20 points; the current license and iOS Swift Package
-Manager blockers account for that allowed deficit.
+score deficit greater than 20 points. A proprietary license may carry a score
+cost even after the release owner approves it. The CocoaPods-only iOS
+integration also carries a score cost because
+native `AsleepSDK` 3.2.0 has no verified consumer-accessible Swift Package
+Manager artifact, but the package does not claim SPM support.
 
 ```sh
 copy="$(mktemp -d)"

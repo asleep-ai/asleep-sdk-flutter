@@ -1,21 +1,22 @@
 # Compatibility and Release Readiness
 
-Verified on: 2026-07-29
+Verified on: 2026-07-30
 
 ## Status Summary
 
-| Layer | Local development baseline | Publication status |
+| Layer | Experimental 0.1.0 baseline | Publication status |
 |---|---|---|
-| Dart package | `asleep_sdk_flutter`, local version `0.1.0-dev.1` | Provisional; package ownership and final version are UNKNOWN |
-| Dart SDK | `^3.12.2` in the generated local scaffold | Provisional; intended consumer fleet is UNKNOWN |
-| Flutter | `>=3.44.0` | Conservative local floor matching the Dart 3.12 toolchain; consumer fleet remains UNKNOWN |
-| Android | API 24, pinned `ai.asleep:asleepsdk:3.2.1` | Local Kotlin compile, unit tests, and example APK build verified |
-| iOS | iOS 15, pinned `AsleepSDK 3.2.0`, CocoaPods-only | Full pod lint and Swift compile verified with Xcode 26.6; clean CI remains required |
-| Public repository | Local-only package | UNKNOWN |
-| License | Explicit proprietary/license-pending local notice | Legal grant and copyright holder are UNKNOWN |
+| Dart package | `asleep_sdk_flutter` 0.1.0 | Experimental public version selected; `asleep.ai` verified publisher exists; first publish has not been performed |
+| Dart SDK | `^3.12.2` | Experimental floor matching the verified toolchain; broader consumer-fleet validation remains |
+| Flutter | `>=3.44.0` | Experimental floor matching Dart 3.12.2; broader consumer-fleet validation remains |
+| Android | API 24, pinned `ai.asleep:asleepsdk:3.2.1` | Kotlin compile, lint, merged-manifest policy, and 15 Android bridge tests pass on the current implementation |
+| iOS | iOS 15, pinned `AsleepSDK` 3.2.0, CocoaPods-only | Current pod lint and unsigned release device build pass locally; clean release-CI verification remains |
+| Source distribution | Private GitHub repository, public pub.dev archive | `.pubignore` excludes internal `doc/` and Pigeon schema files from the archive |
+| License | Proprietary notice copied from the RN 1.2 package | Release owner must confirm that the existing Asleep grant applies to this Flutter archive |
 
-This repository is a local implementation candidate, not a published or
-publication-approved SDK.
+This repository contains the experimental 0.1.0 implementation candidate. It
+is not yet published, and the experimental label does not waive the legal,
+archive-review, release-CI, or runtime-QA gates below.
 
 ## Verified Source Snapshots
 
@@ -35,14 +36,15 @@ and
 
 ## Native Version Policy
 
-The first Flutter release must select one explicit native compatibility policy:
+The experimental 0.1.0 release selects the conservative parity baseline:
+Android 3.2.1 and iOS 3.2.0, matching RN 1.2.
 
-1. **Parity baseline:** Android 3.2.1 and iOS 3.2.0, matching RN 1.2.
-   This conservative behavioral baseline is selected by the local draft.
-2. **Forward Android baseline:** Android 3.3 plus iOS 3.2.0.
+Future releases may consider:
+
+1. **Forward Android baseline:** Android 3.3 plus iOS 3.2.0.
    This requires a verified, consumer-accessible 3.3 Android artifact and
    explicit documentation of features that remain Android-only.
-3. **Version range:** unsupported until binary/source compatibility has been
+2. **Version range:** unsupported until binary/source compatibility has been
    demonstrated across every included native version.
 
 Do not use a dynamic native dependency. A Flutter release must pin exact native
@@ -62,7 +64,7 @@ versions and record them in the changelog and this matrix.
 | Notification permission | Android 13+ visibility concern | Denial must not be misreported as microphone denial |
 | FGS microphone permission | Relevant on Android 14+ | Check using the platform API level where the permission exists |
 | Battery exemption | Operational prerequisite | Request opens settings and does not guarantee the user changed the setting |
-| Process restore | Supported by native service | Flutter adapter must reconnect callbacks after UI-process recreation |
+| Process restore | Supported by native service | The plugin probes `isSleepTrackingAlive` before setup/configuration can set the process-global context, then rechecks liveness and reconnects the listener during restore |
 
 The 3.3 source reports version `3.3.0` locally at
 [Version.kt at the verified Android source commit](https://github.com/asleep-ai/asleep-sdk-android-src/blob/a58774fc2232822dc14575bf33ec59850ce6e22f/AsleepSDK/src/main/java/ai/asleep/asleepsdk/Version.kt#L5),
@@ -75,7 +77,7 @@ availability is not proof of consumer artifact availability.
 |---|---|---|
 | Minimum iOS | 15 | Follows the current iOS 3.2.0 native project and local plugin podspec |
 | Native SDK | 3.2.0 | Local `main` equals tag `3.2.0` |
-| Linking | CocoaPods static framework | Full pod lint and Swift compile verified with Xcode 26.6; no verified SPM distribution path |
+| Linking | CocoaPods static framework | Native `AsleepSDK` 3.2.0 has no verified consumer-accessible Swift Package Manager artifact |
 | Microphone usage text | Required in consuming app | `NSMicrophoneUsageDescription` |
 | Background mode | Required for overnight tracking | `UIBackgroundModes = audio` |
 | Audio input | Built-in microphone | Native 3.2.0 source states Bluetooth microphone input is unsupported |
@@ -99,6 +101,8 @@ The Flutter SDK preserves these developer-facing contracts:
 - reports throw structured failures rather than returning null failure
   sentinels;
 - empty report list remains valid data;
+- report lists page through both native APIs until the first partial page
+  instead of inheriting a single-page cap;
 - portable analysis results arrive through an event;
 - Android immediate analysis can additionally appear on the command result;
 - iOS returns an acknowledgement before the analysis event;
@@ -118,7 +122,7 @@ Intentional Dart translations:
 
 | Capability | Android | iOS | Compatibility treatment |
 |---|---|---|---|
-| Persistent tracking restore | Foreground service can survive UI process | Native manager reports its current session ID | `RestoreResult` uses each native status accessor |
+| Persistent tracking restore | Foreground service can survive UI process; the plugin performs a pre-setup liveness probe and later reconnects the listener | No process-persistent service; the bridge returns `false` | Only Android can project a restored tracking session |
 | Battery optimization | Real system setting | Not applicable | iOS returns exempt |
 | Foreground notification configuration | Required/supported | Not applicable | Nested Android option |
 | Extra audio-session options | Not applicable | Supported | Nested iOS option |
@@ -138,64 +142,63 @@ Intentional Dart translations:
 - New native events are delivered as `UnknownNativeEvent` until the Dart API
   adds a typed event.
 
-AsleepSDK iOS 3.2.0 reports a session ID for both its internal open and closed
-states. The public status type exposes only that nullable ID, so the Flutter
-bridge follows the same restore check as the React Native bridge. A closed
-session can therefore be reported as restorable after a new Flutter engine is
-created. A future native SDK must expose an explicit active-state accessor
-before this ambiguity can be removed without relying on private internals.
+AsleepSDK iOS 3.2.0 retains a session ID after close, so that identifier cannot
+prove that tracking is active. The iOS bridge therefore returns
+`hasActiveSession: false` instead of inventing a restorable session. A future
+native SDK can add iOS restoration only after it exposes an explicit active
+session signal.
 
-## Publication Metadata: UNKNOWN
+## Publication Metadata
 
-The following values must not be guessed:
+The selected values are:
 
-- final pub.dev package name and ownership;
-- package version and stability promise;
-- public repository URL and source visibility;
-- issue tracker, documentation URL, final topics, and funding metadata;
-- copyright holder and approved license text;
-- publishing organization and pub.dev automated-publishing identity;
-- Maven/CocoaPods/SPM artifact coordinates intended for third-party consumers;
+- package `asleep_sdk_flutter` version 0.1.0;
+- experimental `0.x` stability policy;
+- verified publisher `asleep.ai`;
+- Android 3.2.1 and iOS 3.2.0 native dependencies;
+- Android API 24, iOS 15, Dart `^3.12.2`, and Flutter `>=3.44.0` experimental
+  floors.
+
+The following values remain unresolved and must not be guessed:
+
+- public source repository and issue tracker URLs; the current private GitHub
+  URLs are intentionally omitted from public package metadata;
+- documentation URL, final topics, and funding metadata;
+- final legal approval to apply the existing Asleep proprietary notice;
 - whether native repositories and artifacts may be redistributed;
 - support contact and security-reporting channel;
-- supported Flutter/Dart lower bounds for the real consumer fleet;
-- supported Android/iOS version matrix and deprecation policy.
+- long-term platform support and deprecation policy.
 
-The package uses the verified Asleep product homepage, conservative draft
-topics, and an explicit license-pending notice. A public repository URL, issue
-tracker, approved license grant, and copyright holder remain release blockers.
+The package uses the verified Asleep product homepage, conservative topics, and
+the proprietary notice already used by the RN 1.2 package. Release approval
+must confirm that the legal terms apply to the Flutter archive. Private source
+and issue URLs must not be published as broken public links.
 
 ## Release Blockers
 
 A public package must not be published until all of the following are resolved:
 
-1. Product/legal approval for package name, source visibility, license, and
-   redistribution of both native SDKs.
-2. A tagged and consumer-accessible Android artifact is selected. If Android
-   3.3 is selected, a source branch and internal GitHub Packages change are not
-   sufficient evidence of public availability.
-3. iOS 3.2.0 artifact access has been proven locally by full pod lint, but must
-   also be proven from a clean CI runner without developer-local credentials.
-4. Native artifact credentials and repository configuration are documented
-   without committing secrets.
-5. The conservative Dart `^3.12.2` and Flutter `>=3.44.0` floors are internally
-   consistent, but must be checked against the intended consumer fleet.
-6. Android min/compile/target API, AGP, Gradle, Kotlin, and Java compatibility
-   are verified in clean example builds.
-7. iOS 15, Swift 5, static CocoaPods linking, and Swift compilation are locally
-   verified. Clean example/CI verification and application capabilities remain.
-8. Android cold-start, permission-denied, API 33 notification-denied, API 34
+1. Product/legal approval for public source distribution, the license, and
+   redistribution and use of both native SDKs.
+2. Confirm that the RN 1.2 proprietary notice and copyright holder apply to
+   this Flutter archive.
+3. Recheck Android 3.2.1 and iOS 3.2.0 artifact access from clean release-CI
+   runners without developer-local credentials.
+4. Confirm public support, issue, security, and source links.
+5. Inspect the final `.pubignore` archive and run the package, credential, and
+   license gates from the exact release commit.
+6. Android cold-start, permission-denied, API 33 notification-denied, API 34
    foreground microphone, process-restore, and battery-setting paths are
    exercised on devices/emulators.
-9. iOS cold-start, denied microphone, background tracking, interruption,
+7. iOS cold-start, denied microphone, background tracking, interruption,
    foreground recovery, duplicate resume, and analysis-ack/event paths are
    exercised on a device.
-10. Error-code fixtures prove iOS uses `error.errorCode.code` and Android uses
-    the native callback code, including unknown-code fallback.
-11. Package metadata, README, changelog, API docs, example, tests, and generated
+8. Error-code fixtures prove iOS uses `error.errorCode.code` and Android uses
+   the native callback code, including unknown-code fallback.
+9. Package metadata, README, changelog, API docs, example, tests, and generated
     Pigeon code agree on the selected native versions.
-12. The public repository, CI, signing, pub.dev publishing, and support process
-    are explicitly authorized.
+10. CI, signing, pub.dev publishing, and support processes are explicitly
+    authorized.
 
 ## Compatibility Verification Checklist
 
@@ -213,4 +216,5 @@ Before each release:
 - compare all native listener methods and error cases against the previous
   pinned versions;
 - update `CONTRACT_MATRIX.md`, this document, and the changelog together;
-- publish nothing until credentials, metadata, and legal blockers are closed.
+- publish nothing until credentials, metadata, legal blockers, release CI, and
+  the approved runtime QA scope are closed.

@@ -28,12 +28,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
 
       - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -58,6 +58,28 @@ jobs:
           fi
           if ! grep -Fxq "## $package_version" CHANGELOG.md; then
             echo "CHANGELOG.md has no section for $package_version." >&2
+            exit 1
+          fi
+
+      - name: Validate release tag provenance
+        if: ${{ github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Release tags must point to a commit contained in origin/main." >&2
+            exit 1
+          fi
+          tag_ref="refs/tags/$GITHUB_REF_NAME"
+          if [[ "$(git cat-file -t "$tag_ref")" != "tag" ]]; then
+            echo "Release tags must be annotated and signed." >&2
+            exit 1
+          fi
+          tag_object="$(git rev-parse "$tag_ref")"
+          if [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object" --jq '.verification.verified')" != "true" ]]; then
+            echo "GitHub could not verify the release tag signature." >&2
             exit 1
           fi
 
@@ -121,7 +143,7 @@ jobs:
             > pana-report.json
 
       - name: Upload pana report
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: pana-report-${{ github.ref_name }}
           path: pana-report.json
@@ -132,7 +154,6 @@ jobs:
         run: |
           package_copy="$(mktemp -d "$RUNNER_TEMP/asleep-sdk-publish.XXXXXX")"
           git archive HEAD | tar -x -C "$package_copy"
-          sed -i '/^publish_to: none$/d' "$package_copy/pubspec.yaml"
           echo "PACKAGE_COPY=$package_copy" >> "$GITHUB_ENV"
 
       - name: Scan staged archive
@@ -158,16 +179,82 @@ jobs:
       - name: Validate public package archive
         run: cd "$PACKAGE_COPY" && dart pub publish --dry-run
 
+  android:
+    name: Validate Android release candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Java
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build release example
+        working-directory: example
+        run: flutter build apk --release
+
+      - name: Test Android bridge
+        working-directory: example/android
+        run: ./gradlew :asleep_sdk_flutter:testDebugUnitTest
+
+      - name: Lint release example
+        working-directory: example/android
+        run: ./gradlew :app:lintRelease
+
+  ios:
+    name: Validate iOS release candidate
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Validate CocoaPods plugin
+        working-directory: ios
+        run: pod lib lint asleep_sdk_flutter.podspec --allow-warnings --skip-tests
+
+      - name: Build unsigned release example
+        working-directory: example
+        run: flutter build ios --release --no-codesign
+
   publish:
     name: Publish to pub.dev
-    needs: validate
+    needs:
+      - validate
+      - android
+      - ios
     if: >-
       github.event_name == 'push' &&
       vars.PUBDEV_PUBLISH_ENABLED == 'true'
     permissions:
       contents: read
       id-token: write
-    uses: dart-lang/setup-dart/.github/workflows/publish.yml@v1
+    uses: dart-lang/setup-dart/.github/workflows/publish.yml@65eb853c7ba17dde3be364c3d2858773e7144260 # v1
     with:
       environment: pub.dev
 
@@ -175,12 +262,16 @@ jobs:
     name: Create GitHub Release
     needs:
       - validate
+      - android
+      - ios
       - publish
     if: >-
       always() &&
       github.event_name == 'push' &&
       needs.validate.result == 'success' &&
-      (needs.publish.result == 'success' || needs.publish.result == 'skipped') &&
+      needs.android.result == 'success' &&
+      needs.ios.result == 'success' &&
+      needs.publish.result == 'success' &&
       vars.RELEASE_CREATION_ENABLED == 'true'
     runs-on: ubuntu-latest
     permissions:
