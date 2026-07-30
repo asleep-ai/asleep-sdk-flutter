@@ -83,6 +83,17 @@ void main() {
       expect(client.state.error?.numericCode, 21002);
     });
 
+    test('projects a restored native session into tracking state', () async {
+      platform.hasActiveSession = true;
+      await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
+
+      final result = await client.checkAndRestoreTracking();
+
+      expect(result.hasActiveSession, isTrue);
+      expect(client.state.trackingStatus, TrackingStatus.tracking);
+      expect(client.state.didClose, isFalse);
+    });
+
     test('requests analysis on every ODA upload', () async {
       await client.initialize(
         const AsleepSetupOptions(
@@ -162,6 +173,7 @@ class FakeAsleepPlatform extends AsleepPlatform {
       StreamController<AsleepEvent>.broadcast();
 
   bool hasPermissions = true;
+  bool hasActiveSession = false;
   int permissionRequestCount = 0;
   int startCount = 0;
   int analysisRequestCount = 0;
@@ -181,7 +193,7 @@ class FakeAsleepPlatform extends AsleepPlatform {
 
   @override
   Future<RestoreResult> checkAndRestoreTracking() async {
-    return const RestoreResult(hasActiveSession: false);
+    return RestoreResult(hasActiveSession: hasActiveSession);
   }
 
   @override

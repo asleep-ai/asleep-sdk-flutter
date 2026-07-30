@@ -34,8 +34,9 @@ package.
 
 The plugin remains a single, non-federated package until independent platform
 versioning or third-party implementations become a demonstrated requirement.
-The internal `AsleepPlatform` interface is injectable for tests, but it is not a
-separate published platform-interface package.
+The exported `AsleepPlatform` interface is the supported fake/test seam and is
+therefore a SemVer-governed public API. It is not a separate published
+platform-interface package.
 
 ## Why Pigeon
 

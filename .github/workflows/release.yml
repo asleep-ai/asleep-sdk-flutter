@@ -1,0 +1,193 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to validate without publishing
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FLUTTER_VERSION: 3.44.8
+
+jobs:
+  validate:
+    name: Validate release candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Validate version contract
+        env:
+          REQUESTED_VERSION: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+        run: |
+          package_version="$(awk '$1 == "version:" { print $2; exit }' pubspec.yaml)"
+          requested_version="${REQUESTED_VERSION#v}"
+          if [[ ! "$REQUESTED_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Version must use the v<major>.<minor>.<patch> form." >&2
+            exit 1
+          fi
+          if [[ "$package_version" != "$requested_version" ]]; then
+            echo "pubspec version $package_version does not match $REQUESTED_VERSION." >&2
+            exit 1
+          fi
+          if ! grep -Fxq "## $package_version" CHANGELOG.md; then
+            echo "CHANGELOG.md has no section for $package_version." >&2
+            exit 1
+          fi
+
+      - name: Validate public API SemVer
+        run: |
+          set -euo pipefail
+          dart pub global activate dart_apitool 0.23.2
+          previous_tag="$(
+            git tag --merged "$GITHUB_SHA" --list |
+              grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' |
+              grep -vxF "$GITHUB_REF_NAME" |
+              sort -V |
+              tail -n 1 || true
+          )"
+          if [[ -z "$previous_tag" ]]; then
+            dart pub global run dart_apitool:main extract \
+              --input . \
+              --output "$RUNNER_TEMP/asleep-sdk-flutter-api.json" \
+              --set-exit-on-missing-export \
+              --force-use-flutter
+            exit 0
+          fi
+          previous_package="$(mktemp -d "$RUNNER_TEMP/asleep-sdk-previous.XXXXXX")"
+          git archive "$previous_tag" | tar -x -C "$previous_package"
+          dart pub global run dart_apitool:main diff \
+            --old "$previous_package" \
+            --new . \
+            --version-check-mode fully \
+            --no-ignore-prerelease \
+            --force-use-flutter
+
+      - name: Check formatting
+        run: >-
+          dart format --output=none --set-exit-if-changed
+          lib test example/lib example/test example/integration_test pigeons
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test package
+        run: flutter test
+
+      - name: Test example
+        working-directory: example
+        run: flutter test
+
+      - name: Generate API documentation
+        run: dart doc
+
+      - name: Report dependency freshness
+        run: flutter pub outdated
+
+      - name: Score disposable package copy
+        run: |
+          package_copy="$(mktemp -d "$RUNNER_TEMP/asleep-sdk-pana.XXXXXX")"
+          git archive HEAD | tar -x -C "$package_copy"
+          dart pub global activate pana 0.23.15
+          dart pub global run pana "$package_copy" \
+            --json \
+            --exit-code-threshold 20 \
+            > pana-report.json
+
+      - name: Upload pana report
+        uses: actions/upload-artifact@v7
+        with:
+          name: pana-report-${{ github.ref_name }}
+          path: pana-report.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Stage public package archive
+        run: |
+          package_copy="$(mktemp -d "$RUNNER_TEMP/asleep-sdk-publish.XXXXXX")"
+          git archive HEAD | tar -x -C "$package_copy"
+          sed -i '/^publish_to: none$/d' "$package_copy/pubspec.yaml"
+          echo "PACKAGE_COPY=$package_copy" >> "$GITHUB_ENV"
+
+      - name: Scan staged archive
+        run: |
+          if find "$PACKAGE_COPY" -type f \
+            \( -name "*.jks" \
+              -o -name "*.keystore" \
+              -o -name "*.p12" \
+              -o -name "*.mobileprovision" \
+              -o -name ".env" \
+              -o -name "local.properties" \) \
+            -print -quit | grep -q .; then
+            echo "The staged package contains a sensitive file type." >&2
+            exit 1
+          fi
+          if rg -l \
+            'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}' \
+            "$PACKAGE_COPY" > /dev/null; then
+            echo "The staged package contains a potential credential." >&2
+            exit 1
+          fi
+
+      - name: Validate public package archive
+        run: cd "$PACKAGE_COPY" && dart pub publish --dry-run
+
+  publish:
+    name: Publish to pub.dev
+    needs: validate
+    if: >-
+      github.event_name == 'push' &&
+      vars.PUBDEV_PUBLISH_ENABLED == 'true'
+    permissions:
+      contents: read
+      id-token: write
+    uses: dart-lang/setup-dart/.github/workflows/publish.yml@v1
+    with:
+      environment: pub.dev
+
+  github-release:
+    name: Create GitHub Release
+    needs:
+      - validate
+      - publish
+    if: >-
+      always() &&
+      github.event_name == 'push' &&
+      needs.validate.result == 'success' &&
+      (needs.publish.result == 'success' || needs.publish.result == 'skipped') &&
+      vars.RELEASE_CREATION_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create release with generated notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes

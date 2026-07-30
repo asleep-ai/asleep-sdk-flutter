@@ -3,6 +3,12 @@ description: Flutter plugin for Asleep audio-based sleep tracking on Android and
 version: 0.1.0-dev.1
 publish_to: none
 homepage: https://www.asleep.ai
+topics:
+  - sleep
+  - sleep-tracking
+  - health
+  - android
+  - ios
 
 environment:
   sdk: ^3.12.2

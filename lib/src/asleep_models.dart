@@ -1,9 +1,12 @@
 import 'dart:convert';
 
+/// Lifecycle state of native SDK setup.
 enum SetupStatus { idle, inProgress, complete }
 
+/// Lifecycle state of a tracking session.
 enum TrackingStatus { idle, tracking, paused, recoveryRequired }
 
+/// Recovery behavior associated with an SDK error.
 enum AsleepErrorCategory {
   terminal,
   recordingDead,
@@ -12,6 +15,7 @@ enum AsleepErrorCategory {
   unknown,
 }
 
+/// Errors produced by the Flutter client boundary.
 enum AsleepErrorCode {
   disposed,
   invalidState,
@@ -21,6 +25,7 @@ enum AsleepErrorCode {
   malformedPayload,
 }
 
+/// iOS audio-session options accepted while tracking.
 enum IosAudioSessionOption {
   duckOthers,
   allowAirPlay,
@@ -28,8 +33,10 @@ enum IosAudioSessionOption {
   allowBluetoothA2DP,
 }
 
+/// Current state of an analysis request.
 enum AnalysisRequestStatus { requested, completed }
 
+/// Options used to initialize the native Asleep SDK.
 class AsleepSetupOptions {
   const AsleepSetupOptions({
     required this.apiKey,
@@ -46,6 +53,7 @@ class AsleepSetupOptions {
   final bool enableOnDeviceAnalysis;
 }
 
+/// Credentials and endpoints used to configure the native SDK.
 class AsleepConfiguration {
   const AsleepConfiguration({
     required this.apiKey,
@@ -60,6 +68,7 @@ class AsleepConfiguration {
   final String? callbackUrl;
 }
 
+/// Android foreground-service notification overrides.
 class AndroidNotificationOptions {
   const AndroidNotificationOptions({this.title, this.text, this.icon});
 
@@ -68,6 +77,7 @@ class AndroidNotificationOptions {
   final String? icon;
 }
 
+/// Platform-specific options for a new tracking session.
 class AsleepTrackingOptions {
   const AsleepTrackingOptions({
     this.androidNotification,
@@ -78,12 +88,14 @@ class AsleepTrackingOptions {
   final List<IosAudioSessionOption> iosAudioSessionOptions;
 }
 
+/// Result of checking for a restorable tracking session.
 class RestoreResult {
   const RestoreResult({required this.hasActiveSession});
 
   final bool hasActiveSession;
 }
 
+/// Android battery-optimization status reported by the native SDK.
 class BatteryOptimizationStatus {
   const BatteryOptimizationStatus({
     required this.exempted,
@@ -96,6 +108,7 @@ class BatteryOptimizationStatus {
   final String? message;
 }
 
+/// Acknowledgement and optional immediate result of an analysis request.
 class AnalysisRequest {
   const AnalysisRequest({
     required this.status,
@@ -108,6 +121,7 @@ class AnalysisRequest {
   final AsleepAnalysisResult? immediateResult;
 }
 
+/// Structured error received from a native Asleep SDK.
 class AsleepError {
   const AsleepError({
     required this.code,
@@ -181,6 +195,7 @@ class AsleepError {
   };
 }
 
+/// Exception thrown by the Flutter SDK boundary.
 class AsleepException implements Exception {
   const AsleepException(
     this.code,
@@ -200,6 +215,7 @@ class AsleepException implements Exception {
   String toString() => 'AsleepException(${code.name}): $message';
 }
 
+/// Incremental analysis data for an active or completed session.
 class AsleepAnalysisResult {
   const AsleepAnalysisResult({
     this.id,
@@ -233,6 +249,7 @@ class AsleepAnalysisResult {
   final List<int>? snoringStages;
 }
 
+/// Session metadata and stage data embedded in a detailed report.
 class AsleepReportSession {
   const AsleepReportSession({
     required this.id,
@@ -272,6 +289,7 @@ class AsleepReportSession {
   final List<int>? snoringStages;
 }
 
+/// Sleep and breathing statistics returned by report APIs.
 class AsleepStat {
   AsleepStat._(this.values);
 
@@ -295,6 +313,7 @@ class AsleepStat {
   double? get breathingIndex => _double(values, 'breathingIndex');
 }
 
+/// Detailed sleep report for one session.
 class AsleepReport {
   const AsleepReport({
     required this.timezone,
@@ -327,6 +346,7 @@ class AsleepReport {
   final AsleepStat? stat;
 }
 
+/// Summary metadata for a report-list session.
 class AsleepSession {
   const AsleepSession({
     required this.id,
@@ -375,6 +395,7 @@ class AsleepSession {
   final int? timeInBed;
 }
 
+/// Date range and timezone covered by an aggregate report.
 class AsleepReportPeriod {
   const AsleepReportPeriod({
     required this.timezone,
@@ -396,6 +417,7 @@ class AsleepReportPeriod {
   final String endDate;
 }
 
+/// Aggregate-report entry for a session in which sleep was detected.
 class AsleepSleptSession {
   AsleepSleptSession._({
     required this.id,
@@ -426,6 +448,7 @@ class AsleepSleptSession {
   final Map<String, Object?> raw;
 }
 
+/// Aggregate-report entry for a session in which sleep was not detected.
 class AsleepNeverSleptSession {
   AsleepNeverSleptSession._({
     required this.id,
@@ -453,6 +476,7 @@ class AsleepNeverSleptSession {
   final Map<String, Object?> raw;
 }
 
+/// Aggregate sleep report over a date range.
 class AsleepAverageReport {
   AsleepAverageReport._({
     required this.period,
@@ -497,6 +521,7 @@ class AsleepAverageReport {
   final Map<String, Object?> raw;
 }
 
+/// Immutable client state reduced from native SDK events.
 class AsleepSnapshot {
   const AsleepSnapshot({
     this.setupStatus = SetupStatus.idle,
