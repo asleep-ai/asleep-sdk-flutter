@@ -9,10 +9,10 @@ Verified on: 2026-07-30
 | Dart package | `asleep_sdk_flutter` 0.1.0 | Experimental public version selected; `asleep.ai` verified publisher exists; first publish has not been performed |
 | Dart SDK | `^3.12.2` | Experimental floor matching the verified toolchain; broader consumer-fleet validation remains |
 | Flutter | `>=3.44.0` | Experimental floor matching Dart 3.12.2; broader consumer-fleet validation remains |
-| Android | API 24, pinned `ai.asleep:asleepsdk:3.2.1` | Kotlin compile, lint, merged-manifest policy, and 15 Android bridge tests pass on the current implementation |
+| Android | API 24, pinned `ai.asleep:asleepsdk:3.2.1` | Kotlin compile, lint, merged-manifest policy, and 16 Android bridge tests pass on the current implementation |
 | iOS | iOS 15, pinned `AsleepSDK` 3.2.0, CocoaPods-only | Current pod lint and unsigned release device build pass locally; clean release-CI verification remains |
 | Source distribution | Private GitHub repository, public pub.dev archive | `.pubignore` excludes internal `doc/` and Pigeon schema files from the archive |
-| License | Proprietary notice copied from the RN 1.2 package | Release owner must confirm that the existing Asleep grant applies to this Flutter archive |
+| License | Proprietary notice copied from the RN 1.2 package | Release owner approved applying the existing Asleep notice to this Flutter archive on 2026-07-30 |
 
 This repository contains the experimental 0.1.0 implementation candidate. It
 is not yet published, and the experimental label does not waive the legal,
@@ -164,40 +164,37 @@ The following values remain unresolved and must not be guessed:
 - public source repository and issue tracker URLs; the current private GitHub
   URLs are intentionally omitted from public package metadata;
 - documentation URL, final topics, and funding metadata;
-- final legal approval to apply the existing Asleep proprietary notice;
 - whether native repositories and artifacts may be redistributed;
 - support contact and security-reporting channel;
 - long-term platform support and deprecation policy.
 
 The package uses the verified Asleep product homepage, conservative topics, and
-the proprietary notice already used by the RN 1.2 package. Release approval
-must confirm that the legal terms apply to the Flutter archive. Private source
-and issue URLs must not be published as broken public links.
+the proprietary notice already used by the RN 1.2 package. The release owner
+approved applying that notice to the Flutter archive on 2026-07-30. Private
+source and issue URLs must not be published as broken public links.
 
 ## Release Blockers
 
 A public package must not be published until all of the following are resolved:
 
-1. Product/legal approval for public source distribution, the license, and
-   redistribution and use of both native SDKs.
-2. Confirm that the RN 1.2 proprietary notice and copyright holder apply to
-   this Flutter archive.
-3. Recheck Android 3.2.1 and iOS 3.2.0 artifact access from clean release-CI
+1. Product approval for public source distribution and external use of both
+   native SDK dependency paths.
+2. Recheck Android 3.2.1 and iOS 3.2.0 artifact access from clean release-CI
    runners without developer-local credentials.
-4. Confirm public support, issue, security, and source links.
-5. Inspect the final `.pubignore` archive and run the package, credential, and
+3. Confirm public support, issue, security, and source links.
+4. Inspect the final `.pubignore` archive and run the package, credential, and
    license gates from the exact release commit.
-6. Android cold-start, permission-denied, API 33 notification-denied, API 34
+5. Android cold-start, permission-denied, API 33 notification-denied, API 34
    foreground microphone, process-restore, and battery-setting paths are
    exercised on devices/emulators.
-7. iOS cold-start, denied microphone, background tracking, interruption,
+6. iOS cold-start, denied microphone, background tracking, interruption,
    foreground recovery, duplicate resume, and analysis-ack/event paths are
    exercised on a device.
-8. Error-code fixtures prove iOS uses `error.errorCode.code` and Android uses
+7. Error-code fixtures prove iOS uses `error.errorCode.code` and Android uses
    the native callback code, including unknown-code fallback.
-9. Package metadata, README, changelog, API docs, example, tests, and generated
+8. Package metadata, README, changelog, API docs, example, tests, and generated
     Pigeon code agree on the selected native versions.
-10. CI, signing, pub.dev publishing, and support processes are explicitly
+9. CI, signing, pub.dev publishing, and support processes are explicitly
     authorized.
 
 ## Compatibility Verification Checklist

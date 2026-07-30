@@ -8,9 +8,10 @@ documentation linked below.
 The GitHub repository is private. A pub.dev release is public even when its
 source repository is private: any pub user can download the package archive
 and its included source files. The experimental 0.1.0 candidate is publishable,
-but no upload is authorized until the release owner confirms that the existing
-Asleep proprietary notice applies and approves the exact archive. `.pubignore`
-excludes internal `doc/` and Pigeon
+and the release owner confirmed on 2026-07-30 that the existing Asleep
+proprietary notice applies to the Flutter archive. No upload is authorized
+until the release owner approves the exact archive. `.pubignore` excludes
+internal `doc/` and Pigeon
 schema files; Dart, Kotlin, Swift, generated transport, and example sources
 remain public archive contents.
 
@@ -61,18 +62,16 @@ The release owner must resolve every item before the first upload:
 
 1. Approve public redistribution of every Dart, Kotlin, Swift, generated
    transport, and example source file in the package archive.
-2. Confirm that the proprietary `LICENSE` copied from the RN 1.2 package is
-   approved for this Flutter archive.
-3. Recheck that `asleep_sdk_flutter` is still unused on pub.dev.
-4. Provide public source and issue URLs or keep both fields omitted. Do not
+2. Recheck that `asleep_sdk_flutter` is still unused on pub.dev.
+3. Provide public source and issue URLs or keep both fields omitted. Do not
    expose private GitHub URLs as broken public package metadata.
-5. Resolve the native Android Maven and iOS CocoaPods artifact access policy
+4. Resolve the native Android Maven and iOS CocoaPods artifact access policy
    for external consumers.
-6. Confirm the supported Flutter, Dart, Android, iOS, Asleep Android SDK, and
+5. Confirm the supported Flutter, Dart, Android, iOS, Asleep Android SDK, and
    Asleep iOS SDK version ranges.
-7. Review the exact `dart pub publish --dry-run` archive and run the secret
+6. Review the exact `dart pub publish --dry-run` archive and run the secret
    scan from a clean release commit.
-8. Have an authorized human run the first `dart pub publish`.
+7. Have an authorized human run the first `dart pub publish`.
 
 The first version of a new package cannot use pub.dev automated publishing.
 The first human uploader becomes the package uploader. After that release, the

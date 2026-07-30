@@ -78,8 +78,6 @@ state management.
 - Public source repository URL, issue tracker, support, security, and
   documentation URLs. Private GitHub URLs are intentionally omitted from
   public package metadata.
-- Confirmation that the RN 1.2 proprietary license notice and copyright holder
-  apply to this Flutter archive.
 - Public redistribution approval for the Dart wrapper and both native SDK
   dependency paths.
 - Final Flutter/Dart lower bounds across the intended consumer fleet.
