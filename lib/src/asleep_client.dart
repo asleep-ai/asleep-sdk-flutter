@@ -46,6 +46,7 @@ class AsleepClient {
   bool _initialized = false;
   bool _onDeviceAnalysisEnabled = false;
   bool _initializationInFlight = false;
+  bool _restoreInFlight = false;
   bool _trackingStatusChecked = false;
   bool _preflightRestoreDetected = false;
   bool _preflightConfigureAllowed = false;
@@ -170,36 +171,45 @@ class AsleepClient {
 
   /// Checks for a native tracking session that can be restored.
   Future<RestoreResult> checkAndRestoreTracking() async {
-    _ensureReady();
-    if (_hasPendingLifecycleCommand) {
+    _ensureOpen();
+    if (_restoreInFlight ||
+        _initializationInFlight ||
+        _hasPendingLifecycleCommand) {
       throw const AsleepException(
         AsleepErrorCode.invalidState,
-        'Cannot restore tracking while a lifecycle command is in progress.',
+        'Cannot restore tracking while another restore, initialization, or a '
+        'lifecycle command is in progress.',
       );
     }
-    final result = await _platform.checkAndRestoreTracking();
-    final stalePreflight = _preflightRestoreDetected;
-    _preflightRestoreDetected = false;
-    _preflightConfigureAllowed = false;
-    _trackingStatusChecked = true;
-    if (result.hasActiveSession) {
-      _recordingDeadSession = false;
-      _setState(
-        _state.copyWith(
-          trackingStatus: TrackingStatus.tracking,
-          didClose: false,
-        ),
-      );
-    } else if (stalePreflight &&
-        _state.trackingStatus == TrackingStatus.tracking) {
-      _setState(
-        _state.copyWith(
-          trackingStatus: TrackingStatus.idle,
-          clearSessionId: true,
-        ),
-      );
+    _restoreInFlight = true;
+    try {
+      _attachEvents();
+      final result = await _platform.checkAndRestoreTracking();
+      final stalePreflight = _preflightRestoreDetected;
+      _preflightRestoreDetected = result.hasActiveSession;
+      _preflightConfigureAllowed = result.hasActiveSession && !_initialized;
+      _trackingStatusChecked = true;
+      if (result.hasActiveSession) {
+        _recordingDeadSession = false;
+        _setState(
+          _state.copyWith(
+            trackingStatus: TrackingStatus.tracking,
+            didClose: false,
+          ),
+        );
+      } else if (stalePreflight &&
+          _state.trackingStatus == TrackingStatus.tracking) {
+        _setState(
+          _state.copyWith(
+            trackingStatus: TrackingStatus.idle,
+            clearSessionId: true,
+          ),
+        );
+      }
+      return result;
+    } finally {
+      _restoreInFlight = false;
     }
-    return result;
   }
 
   /// Returns the Android battery-optimization status.
@@ -497,8 +507,6 @@ class AsleepClient {
     switch (event) {
       case TrackingCreatedEvent():
         final sessionId = _nonEmpty(event.sessionId);
-        _preflightRestoreDetected = false;
-        _preflightConfigureAllowed = false;
         _startPending = false;
         _recordingDeadSession = false;
         _setState(
@@ -511,8 +519,6 @@ class AsleepClient {
           ),
         );
       case TrackingUploadedEvent():
-        _preflightRestoreDetected = false;
-        _preflightConfigureAllowed = false;
         final wasRecovering =
             _state.trackingStatus == TrackingStatus.recoveryRequired;
         _startPending = false;
@@ -716,6 +722,12 @@ class AsleepClient {
       throw const AsleepException(
         AsleepErrorCode.invalidState,
         'SDK initialization is already in progress.',
+      );
+    }
+    if (_restoreInFlight) {
+      throw const AsleepException(
+        AsleepErrorCode.invalidState,
+        'Cannot initialize while a restore check is in progress.',
       );
     }
   }

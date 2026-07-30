@@ -6,7 +6,7 @@ Verified on: 2026-07-30
 
 | Source | Verified snapshot | Role in this package |
 |---|---|---|
-| [React Native SDK](https://github.com/asleep-ai/asleep-sdk-react-native/tree/58ec6aa727d924aedc67bce196314aa7c5093ba6) | `origin/main` at `58ec6aa727d924aedc67bce196314aa7c5093ba6`; package `1.2.0` | Primary developer journey, public state, error, event, and result semantics |
+| [React Native SDK](https://github.com/asleep-ai/asleep-sdk-react-native/tree/1b898da076a0f17d488f2ed88486ac473cbae72f) | `origin/main` at `1b898da076a0f17d488f2ed88486ac473cbae72f`; package `1.2.0` | Primary developer journey, public state, error, event, and result semantics |
 | [Android SDK 3.2.1](https://github.com/asleep-ai/asleep-sdk-android-src/tree/c22adc123a71a1b22ec6fecd7ad1153a169e9209) | `main` at `c22adc123a71a1b22ec6fecd7ad1153a169e9209`; tag `v3.2.1` | Native version bundled by the React Native baseline |
 | [Current Android 3.3 source](https://github.com/asleep-ai/asleep-sdk-android-src/tree/a58774fc2232822dc14575bf33ec59850ce6e22f) | `feature/github-packages-publish` at `a58774fc2232822dc14575bf33ec59850ce6e22f`; contains merged 3.3 work and reports `3.3.0`, but has no 3.3 release tag | Forward-compatibility review only; not yet a safe published dependency baseline |
 | [iOS SDK 3.2.0](https://github.com/asleep-ai/asleep-sdk-ios-src/tree/b9d3768006a6c15cd35deb352b73eababb3f14a9) | `main` at `b9d3768006a6c15cd35deb352b73eababb3f14a9`; tag `3.2.0` | Native version bundled by the React Native baseline |
@@ -21,11 +21,10 @@ The Flutter API translates the React Native v1.2 journey without copying its
 React-specific hook:
 
 1. Create one `AsleepClient`.
-2. Call `initialize(AsleepSetupOptions)` for setup/ODA, or
-   `configure(AsleepConfiguration)` for normal configuration. Both paths run a
-   restoration preflight before native setup/configuration.
-3. Call `checkAndRestoreTracking()` to complete the explicit prerequisite check
-   before starting a new session.
+2. Call `checkAndRestoreTracking()` before initialization.
+3. If a native session survives, call `configure(AsleepConfiguration)` to
+   reconnect it. Otherwise call `initialize(AsleepSetupOptions)` for setup/ODA.
+   Both initialization paths recheck restoration before native configuration.
 4. Call `checkBatteryOptimization()`.
 5. Call `hasRequiredPermissions()` without showing UI.
 6. From a user-initiated flow, call `requestRequiredPermissions()` if required.
@@ -48,7 +47,7 @@ analytics, wall-clock tracking duration, and product-specific state management.
 |---|---|---|---|---|
 | `initialize(options)` | `setup(apiKey, baseUrl?, callbackUrl?, service?, enableODA?)` | Setup listener emits progress, completion, or numeric failure. Android 3.3 additionally has an app ID/app secret overload; it is not exposed in this initial Flutter surface. | `Asleep.setup` takes the same API-key fields and a delegate. | Runs restoration preflight first, then completes only after setup and native configuration managers are ready. Progress and the authoritative projected lifecycle remain available through `SetupCompletedEvent` and `state.setupStatus`. |
 | `configure(configuration)` | `initAsleepConfig(apiKey, userId?, baseUrl?, callbackUrl?)` | Callback returns `userId` and `AsleepConfig`; the wrapper creates reports from the config. | Delegate returns `userId` and `Asleep.Config`; the wrapper creates tracking and report managers. | Runs restoration preflight first, then returns `Future<void>`; joined user identity is delivered through `UserJoinedEvent` and state. |
-| `checkAndRestoreTracking()` | Probe service, reconnect only on Android, return `{hasActiveSession}`. | The plugin probes `isSleepTrackingAlive(context)` when the engine attaches, before setup/configuration assigns the SDK context. Restore rechecks liveness and calls `connectSleepTracking(listener)` only while the service is alive. | The bridge returns `false`; a retained session ID is not accepted as proof of active tracking. | Returns `RestoreResult`. Only a verified Android survivor projects `TrackingStatus.tracking`. |
+| `checkAndRestoreTracking()` | Probe service before configuration, reconnect only on Android, return `{hasActiveSession}`. | The plugin probes `isSleepTrackingAlive(context)` when the engine attaches, before setup/configuration assigns the SDK context. Restore rechecks liveness and calls `connectSleepTracking(listener)` only while the service is alive. | The bridge returns `false`; a retained session ID is not accepted as proof of active tracking. | May be called before initialization and returns `RestoreResult`. Only a verified Android survivor projects `TrackingStatus.tracking` and permits the following `configure()` call. |
 | `checkBatteryOptimization()` | Required before start on both platforms for a uniform journey. | Uses `PowerManager.isIgnoringBatteryOptimizations`. | Not applicable. | Returns `BatteryOptimizationStatus`; iOS resolves `exempted: true`. |
 | `requestBatteryOptimizationExemption()` | Opens Android settings; iOS is a successful no-op. | Returns `true` when already exempt, `false` after opening settings. | Not applicable. | Returns `Future<bool>` with the same meaning. It does not wait for the user to change the setting. |
 | `hasRequiredPermissions()` | Non-interactive check. | Requires `RECORD_AUDIO`; API 34+ foreground microphone service requirements must also be satisfied. | Checks microphone recording permission. | Returns `Future<bool>` and never opens UI. |
@@ -66,9 +65,9 @@ analytics, wall-clock tracking duration, and product-specific state management.
 | `dispose()` | RN uses ref-counted listener teardown. | Detaches Flutter channel/event resources; must not stop tracking implicitly. | Detaches Flutter channel/event resources; must not stop tracking implicitly. | Idempotent. It closes client-owned streams and rejects subsequent commands. |
 
 The React Native native-wrapper method names and payloads are visible in
-[its current iOS adapter](https://github.com/asleep-ai/asleep-sdk-react-native/blob/58ec6aa727d924aedc67bce196314aa7c5093ba6/ios/AsleepModule.swift)
+[its current iOS adapter](https://github.com/asleep-ai/asleep-sdk-react-native/blob/1b898da076a0f17d488f2ed88486ac473cbae72f/ios/AsleepModule.swift)
 and
-[Android adapter](https://github.com/asleep-ai/asleep-sdk-react-native/blob/58ec6aa727d924aedc67bce196314aa7c5093ba6/android/src/main/java/ai/asleep/reactnative/AsleepModule.kt).
+[Android adapter](https://github.com/asleep-ai/asleep-sdk-react-native/blob/1b898da076a0f17d488f2ed88486ac473cbae72f/android/src/main/java/ai/asleep/reactnative/AsleepModule.kt).
 
 ## State Contract
 

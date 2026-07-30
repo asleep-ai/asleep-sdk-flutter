@@ -147,16 +147,77 @@ void main() {
       expect(client.state.sessionId, 'session-1');
     });
 
-    test('projects a restored native session into tracking state', () async {
+    test('serializes restore checks against restore and initialize', () async {
+      platform.restoreCompleter = Completer<RestoreResult>();
+      final restore = client.checkAndRestoreTracking();
+      await pumpEventQueue();
+
+      await expectLater(
+        client.checkAndRestoreTracking(),
+        throwsInvalidStateContaining('another restore'),
+      );
+      await expectLater(
+        client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key')),
+        throwsInvalidStateContaining('restore check'),
+      );
+
+      platform.restoreCompleter!.complete(
+        const RestoreResult(hasActiveSession: true),
+      );
+      expect((await restore).hasActiveSession, isTrue);
+      expect(platform.setupCount, 0);
+    });
+
+    test('releases the restore guard after native rejection', () async {
+      platform.restoreCompleter = Completer<RestoreResult>();
+      final restore = client.checkAndRestoreTracking();
+      final failure = expectLater(restore, throwsStateError);
+
+      platform.restoreCompleter!.completeError(
+        StateError('restore unavailable'),
+      );
+      await failure;
+      platform.restoreCompleter = null;
+
+      expect(
+        (await client.checkAndRestoreTracking()).hasActiveSession,
+        isFalse,
+      );
+    });
+
+    test('restores before initialization and then permits configure', () async {
       platform.hasActiveSession = true;
-      await client.configure(const AsleepConfiguration(apiKey: 'test-api-key'));
 
       final result = await client.checkAndRestoreTracking();
 
       expect(result.hasActiveSession, isTrue);
       expect(client.state.trackingStatus, TrackingStatus.tracking);
       expect(client.state.didClose, isFalse);
+
+      await client.configure(const AsleepConfiguration(apiKey: 'test-api-key'));
+
+      expect(client.state.setupStatus, SetupStatus.complete);
+      expect(platform.configureCount, 1);
     });
+
+    for (final event in <AsleepEvent>[
+      const TrackingCreatedEvent(sessionId: 'restored-session'),
+      const TrackingUploadedEvent(sequence: 1),
+    ]) {
+      test('preserves restored-session configure access after '
+          '${event.runtimeType}', () async {
+        platform.hasActiveSession = true;
+        await client.checkAndRestoreTracking();
+
+        platform.emit(event);
+        await client.configure(
+          const AsleepConfiguration(apiKey: 'test-api-key'),
+        );
+
+        expect(client.state.setupStatus, SetupStatus.complete);
+        expect(platform.configureCount, 1);
+      });
+    }
 
     test('requires restore and battery checks before startTracking', () async {
       await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
@@ -572,8 +633,12 @@ void main() {
       );
 
       expect(client.state.setupStatus, SetupStatus.idle);
+      expect(
+        (await client.checkAndRestoreTracking()).hasActiveSession,
+        isFalse,
+      );
       await expectLater(
-        client.checkAndRestoreTracking(),
+        client.checkBatteryOptimization(),
         throwsInvalidStateContaining('initialize'),
       );
     });
@@ -667,8 +732,12 @@ void main() {
       );
 
       expect(client.state.setupStatus, SetupStatus.idle);
+      expect(
+        (await client.checkAndRestoreTracking()).hasActiveSession,
+        isFalse,
+      );
       await expectLater(
-        client.checkAndRestoreTracking(),
+        client.checkBatteryOptimization(),
         throwsInvalidStateContaining('initialize'),
       );
     });
@@ -938,6 +1007,7 @@ class FakeAsleepPlatform extends AsleepPlatform {
   Completer<void>? startCompleter;
   Completer<void>? stopCompleter;
   Completer<void>? resumeCompleter;
+  Completer<RestoreResult>? restoreCompleter;
   Completer<AnalysisRequest>? analysisCompleter;
   Completer<void>? disposeCompleter;
   Completer<bool>? permissionCompleter;
@@ -988,6 +1058,9 @@ class FakeAsleepPlatform extends AsleepPlatform {
 
   @override
   Future<RestoreResult> checkAndRestoreTracking() async {
+    if (restoreCompleter case final completer?) {
+      return completer.future;
+    }
     return RestoreResult(hasActiveSession: hasActiveSession);
   }
 

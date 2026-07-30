@@ -45,9 +45,10 @@ This separation is required because native completion differs:
 - Android analysis can return a full immediate result.
 - iOS analysis returns an acknowledgement and later emits the result.
 
-Application code can await `initialize()` for readiness. It should use setup
-events for progress and projected lifecycle state, and analysis events as the
-cross-platform source of truth for deferred results.
+Application code first awaits `checkAndRestoreTracking()`. It then awaits
+`configure()` for a surviving Android session or `initialize()` for a fresh
+session. Setup events remain the progress and projected lifecycle surface, and
+analysis events are the cross-platform source of truth for deferred results.
 
 ## Ownership and lifecycle
 

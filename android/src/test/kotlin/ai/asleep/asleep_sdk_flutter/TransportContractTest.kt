@@ -190,6 +190,107 @@ internal class TransportContractTest {
     }
 
     @Test
+    fun initializationTimeoutFailsCallerButQuarantinesNativeAttempt() {
+        var timeout: Runnable? = null
+        var firstResult: Result<Unit>? = null
+        var secondCalled = false
+        var failureEventCount = 0
+        val coordinator =
+            InitializationCoordinator(
+                operation = "setup",
+                schedule = { runnable, delay ->
+                    assertEquals(INITIALIZATION_TIMEOUT_MILLIS, delay)
+                    timeout = runnable
+                },
+                cancel = {},
+                onTimeout = { failureEventCount += 1 },
+            )
+
+        val attempt = assertNotNull(coordinator.begin { firstResult = it })
+        assertTrue(coordinator.isAwaiting(attempt))
+        assertNotNull(timeout).run()
+
+        val error = assertNotNull(firstResult).exceptionOrNull() as FlutterError
+        assertEquals("INITIALIZATION_TIMEOUT", error.code)
+        assertTrue(coordinator.isBusy)
+        assertFalse(coordinator.isAwaiting(attempt))
+        assertEquals(1, failureEventCount)
+        assertNull(coordinator.begin { secondCalled = true })
+        assertFalse(secondCalled)
+    }
+
+    @Test
+    fun initializationRetryStartsOnlyAfterLateNativeCallbackSettles() {
+        val scheduled = mutableListOf<Runnable>()
+        var firstCompletionCount = 0
+        var secondResult: Result<Unit>? = null
+        val coordinator =
+            InitializationCoordinator(
+                operation = "configuration",
+                schedule = { runnable, _ -> scheduled += runnable },
+                cancel = {},
+            )
+
+        val firstAttempt =
+            assertNotNull(
+                coordinator.begin {
+                    firstCompletionCount += 1
+                },
+            )
+        scheduled.single().run()
+        assertEquals(1, firstCompletionCount)
+
+        assertFalse(coordinator.finish(firstAttempt, Result.success(Unit)))
+        assertFalse(coordinator.isBusy)
+
+        val secondAttempt = assertNotNull(coordinator.begin { secondResult = it })
+        assertFalse(coordinator.finish(firstAttempt, Result.success(Unit)))
+        assertNull(secondResult)
+        assertTrue(coordinator.finish(secondAttempt, Result.success(Unit)))
+        assertTrue(assertNotNull(secondResult).isSuccess)
+        assertEquals(1, firstCompletionCount)
+    }
+
+    @Test
+    fun setupPhaseCompletionRefreshesInitializationTimeout() {
+        val scheduled = mutableListOf<Runnable>()
+        val cancelled = mutableListOf<Runnable>()
+        val coordinator =
+            InitializationCoordinator(
+                operation = "setup",
+                schedule = { runnable, _ -> scheduled += runnable },
+                cancel = { cancelled += it },
+            )
+
+        val attempt = assertNotNull(coordinator.begin {})
+        val firstTimeout = scheduled.single()
+        assertTrue(coordinator.refreshTimeout(attempt))
+
+        assertEquals(listOf(firstTimeout), cancelled)
+        assertEquals(2, scheduled.size)
+    }
+
+    @Test
+    fun initializationDetachFailsWaiterButKeepsNativeAttemptQuarantined() {
+        var result: Result<Unit>? = null
+        val coordinator =
+            InitializationCoordinator(
+                operation = "setup",
+                schedule = { _, _ -> },
+                cancel = {},
+            )
+
+        val attempt = assertNotNull(coordinator.begin { result = it })
+        coordinator.failWaiter(IllegalStateException("Flutter engine detached"))
+
+        assertTrue(assertNotNull(result).isFailure)
+        assertTrue(coordinator.isBusy)
+        assertFalse(coordinator.isAwaiting(attempt))
+        assertFalse(coordinator.finish(attempt, Result.success(Unit)))
+        assertFalse(coordinator.isBusy)
+    }
+
+    @Test
     fun trackingRestorerProbesBeforeSetupAndRechecksBeforeConnecting() {
         val aliveResults = ArrayDeque(listOf(true, true))
         var connectCount = 0

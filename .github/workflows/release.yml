@@ -238,6 +238,20 @@ jobs:
         working-directory: ios
         run: pod lib lint asleep_sdk_flutter.podspec --allow-warnings --skip-tests
 
+      - name: Build simulator example
+        working-directory: example
+        run: flutter build ios --simulator --debug
+
+      - name: Test iOS bridge
+        working-directory: example/ios
+        run: >-
+          xcodebuild
+          -workspace Runner.xcworkspace
+          -scheme Runner
+          -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+          test
+          CODE_SIGNING_ALLOWED=NO
+
       - name: Build unsigned release example
         working-directory: example
         run: flutter build ios --release --no-codesign
@@ -271,7 +285,7 @@ jobs:
       needs.validate.result == 'success' &&
       needs.android.result == 'success' &&
       needs.ios.result == 'success' &&
-      needs.publish.result == 'success' &&
+      (needs.publish.result == 'success' || needs.publish.result == 'skipped') &&
       vars.RELEASE_CREATION_ENABLED == 'true'
     runs-on: ubuntu-latest
     permissions:

@@ -46,17 +46,23 @@ final eventSubscription = asleep.events.listen((event) {
 });
 ```
 
-Initialize, restore, and check platform prerequisites:
+Restore, initialize or reconnect, and check platform prerequisites:
 
 ```dart
-await asleep.initialize(
-  const AsleepSetupOptions(
-    apiKey: 'provided-at-runtime',
-    enableOnDeviceAnalysis: true,
-  ),
-);
-
 final restore = await asleep.checkAndRestoreTracking();
+if (restore.hasActiveSession) {
+  await asleep.configure(
+    const AsleepConfiguration(apiKey: 'provided-at-runtime'),
+  );
+} else {
+  await asleep.initialize(
+    const AsleepSetupOptions(
+      apiKey: 'provided-at-runtime',
+      enableOnDeviceAnalysis: true,
+    ),
+  );
+}
+
 final battery = await asleep.checkBatteryOptimization();
 
 if (!battery.exempted) {

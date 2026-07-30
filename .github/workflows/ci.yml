@@ -127,6 +127,16 @@ jobs:
         working-directory: example
         run: flutter build ios --simulator --debug
 
+      - name: Test iOS bridge
+        working-directory: example/ios
+        run: >-
+          xcodebuild
+          -workspace Runner.xcworkspace
+          -scheme Runner
+          -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+          test
+          CODE_SIGNING_ALLOWED=NO
+
       - name: Package simulator example
         if: ${{ github.event_name != 'pull_request' }}
         working-directory: example

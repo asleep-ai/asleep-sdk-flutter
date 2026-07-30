@@ -22,7 +22,7 @@ archive-review, release-CI, or runtime-QA gates below.
 
 | Project | Branch/ref | Commit | Cleanliness and interpretation |
 |---|---|---|---|
-| [asleep-sdk-react-native](https://github.com/asleep-ai/asleep-sdk-react-native) | fetched `origin/main` | `58ec6aa727d924aedc67bce196314aa7c5093ba6` | Current public contract reviewed as package `1.2.0`. The local checked-out `main` is older and has unrelated example changes, so it was not used as the current baseline. |
+| [asleep-sdk-react-native](https://github.com/asleep-ai/asleep-sdk-react-native) | fetched `origin/main` | `1b898da076a0f17d488f2ed88486ac473cbae72f` | Current public contract reviewed as package `1.2.0`. The local checked-out `main` is older and has unrelated example changes, so it was not used as the current baseline. |
 | [asleep-sdk-android-src](https://github.com/asleep-ai/asleep-sdk-android-src) | tag `v3.2.1` / `main` | `c22adc123a71a1b22ec6fecd7ad1153a169e9209` | Tagged version bundled by RN 1.2. |
 | [asleep-sdk-android-src](https://github.com/asleep-ai/asleep-sdk-android-src) | local `feature/github-packages-publish` | `a58774fc2232822dc14575bf33ec59850ce6e22f` | Clean checkout. Contains merged 3.3 source and reports version `3.3.0`, but is not a 3.3 tag. |
 | [asleep-sdk-ios-src](https://github.com/asleep-ai/asleep-sdk-ios-src) | `main`, tag `3.2.0` | `b9d3768006a6c15cd35deb352b73eababb3f14a9` | Clean checkout exactly at the 3.2.0 tag. |
@@ -30,9 +30,9 @@ archive-review, release-CI, or runtime-QA gates below.
 The RN snapshot pins Android `ai.asleep:asleepsdk:3.2.1` and iOS
 `AsleepSDK 3.2.0`. Its Android wrapper uses min SDK 24 and compile/target SDK 34;
 its iOS podspec declares iOS 14. See the exact
-[Android build file](https://github.com/asleep-ai/asleep-sdk-react-native/blob/58ec6aa727d924aedc67bce196314aa7c5093ba6/android/build.gradle)
+[Android build file](https://github.com/asleep-ai/asleep-sdk-react-native/blob/1b898da076a0f17d488f2ed88486ac473cbae72f/android/build.gradle)
 and
-[iOS podspec](https://github.com/asleep-ai/asleep-sdk-react-native/blob/58ec6aa727d924aedc67bce196314aa7c5093ba6/ios/Asleep.podspec).
+[iOS podspec](https://github.com/asleep-ai/asleep-sdk-react-native/blob/1b898da076a0f17d488f2ed88486ac473cbae72f/ios/Asleep.podspec).
 
 ## Native Version Policy
 

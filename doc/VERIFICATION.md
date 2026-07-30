@@ -26,13 +26,16 @@ the release commit changes before manual publish.
 | API baseline | `dart pub global run dart_apitool:main extract --input . --set-exit-on-missing-export --force-use-flutter` with 0.23.2 | Pass |
 | Dependency freshness | `flutter pub outdated` | All dependencies are the newest resolvable versions; 8 newer versions are incompatible with the selected SDK constraints |
 | Pub score | pana 0.23.15 against a disposable package copy | 140/160: 20/30 conventions, 20/20 documentation, 10/20 platform support, 50/50 static analysis, 40/40 dependencies |
-| Package validation | `dart pub publish --dry-run` in a clean `git archive HEAD` package copy | Pass with 0 warnings; compressed public archive is approximately 94 KB |
+| Package validation | `dart pub publish --dry-run` in a clean `git archive HEAD` package copy | Pass with 0 warnings; compressed public archive is approximately 95 KB |
 | Archive inspection | Sensitive filename and credential-pattern scan of the clean `git archive HEAD` package copy | Pass |
 | Workflow lint | `actionlint .github/workflows/*.yml` | Pass |
-| Android bridge | Gradle compile, unit tests, lint, manifest processing | Pass, including 16 bridge tests, release lint, and a merged manifest without forced battery-exemption permission |
+| Android bridge | Gradle compile, unit tests, lint, manifest processing | Pass, including 20 bridge tests, release lint, and a merged manifest without forced battery-exemption permission |
+| Android native artifact | Maven Central POM and AAR download for `ai.asleep:asleepsdk:3.2.1` | Pass |
 | Android example | `flutter build apk --release` from `example` | Pass; release APK is approximately 93.9 MB |
 | Android device launch | `android run --device=R5KL105975E --apks=.../app-debug.apk`, then `android layout` | The earlier baseline passed on `SM-X236N`, Android 16; no current-candidate device runtime verification |
 | CocoaPods plugin | `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer pod lib lint asleep_sdk_flutter.podspec --allow-warnings --skip-tests` | Wrapper validation passes; the upstream `AsleepSDK` 3.2.0 pod still warns that its declared license file is missing |
+| iOS native artifact | CocoaPods trunk metadata and the `AsleepSDK` 3.2.0 GitHub release asset | Pass; public download succeeds |
+| iOS bridge tests | `xcodebuild -workspace Runner.xcworkspace -scheme Runner -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test CODE_SIGNING_ALLOWED=NO` from `example/ios` | Pass, 3 tests |
 | iOS example | `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer flutter build ios --release --no-codesign` from `example` | Pass; unsigned device app is approximately 45.9 MB |
 
 ## Important verification notes
