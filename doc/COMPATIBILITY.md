@@ -48,6 +48,10 @@ post-publication `Hosted consumer` workflow instead resolves an exact pub.dev
 version and builds both platforms without a path or Git dependency. Neither
 check initializes the SDK, starts tracking, or requires an API key.
 
+The canonical physical-device procedure, evidence contract, and release gate
+are in [`DEVICE_QUALIFICATION.md`](DEVICE_QUALIFICATION.md). The repository
+template is deliberately incomplete and does not claim a device pass.
+
 ## Verified Source Snapshots
 
 | Project | Branch/ref | Commit | Cleanliness and interpretation |
@@ -220,11 +224,13 @@ A public package must not be published until all of the following are resolved:
 4. Inspect the final `.pubignore` archive and run the package, credential, and
    license gates from the exact release commit.
 5. Android cold-start, permission-denied, API 33 notification-denied, API 34
-   foreground microphone, process-restore, and battery-setting paths are
-   exercised on devices/emulators.
+   foreground microphone, process-restore, battery-setting, complete
+   lifecycle, and full-night paths are passed on a physical device with
+   approved exact-commit evidence.
 6. iOS cold-start, denied microphone, background tracking, interruption,
-   foreground recovery, duplicate resume, and analysis-ack/event paths are
-   exercised on a device.
+   foreground recovery, later-upload recovery, analysis-ack/event,
+   stop/report, and full-night paths are passed on a physical device with
+   approved exact-commit evidence.
 7. Error-code fixtures prove iOS uses `error.errorCode.code` and Android uses
    the native callback code, including unknown-code fallback.
 8. Package metadata, README, changelog, API docs, example, tests, and generated
@@ -250,3 +256,5 @@ Before each release:
 - update `CONTRACT_MATRIX.md`, this document, and the changelog together;
 - publish nothing until credentials, metadata, legal blockers, release CI, and
   the approved runtime QA scope are closed.
+- run the protected device-qualification workflow for the exact release commit
+  and confirm its SHA-named evidence artifact remains available.

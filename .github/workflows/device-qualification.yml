@@ -1,0 +1,161 @@
+name: Device qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      evidence_base64:
+        description: Base64-encoded, redacted qualification evidence JSON
+        required: true
+        type: string
+      approval_comment_id:
+        description: Same-repository issue comment approving this evidence digest
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  issues: read
+
+env:
+  FLUTTER_VERSION: 3.44.8
+
+jobs:
+  validate:
+    name: Validate physical-device evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v6
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Decode evidence
+        env:
+          EVIDENCE_BASE64: ${{ inputs.evidence_base64 }}
+        run: |
+          printf '%s' "$EVIDENCE_BASE64" | base64 --decode > "$RUNNER_TEMP/evidence.json"
+          jq -e . "$RUNNER_TEMP/evidence.json" > /dev/null
+
+      - name: Reject prohibited sensitive data
+        run: |
+          set -euo pipefail
+          if jq -e '
+            [
+              .. | objects | keys[] |
+              gsub("[[:space:]_-]"; "") | ascii_downcase |
+              select(
+                test(
+                  "^(apikey|accesstoken|authorization|audiosamples|audiodata|samples|sleepstages|rawdata|userid|useridentifier|sessionid|sessionidentifier|patientid|patientidentifier|subjectid|subjectidentifier|accountid|accountidentifier|report|reports|sleepscore)([:=].*)?$"
+                )
+              )
+            ] | length > 0
+          ' "$RUNNER_TEMP/evidence.json" > /dev/null; then
+            echo "Evidence contains prohibited sensitive data." >&2
+            exit 1
+          fi
+          if rg --quiet -i \
+            'api[[:space:]_-]?key|access[[:space:]_-]?token|authorization|bearer([[:space:]]|%20)+[A-Za-z0-9._-]+|audio[[:space:]_-]?(samples|data)|samples|sleep[[:space:]_-]?stages|raw[[:space:]_-]?data|(user|session|patient|subject|account)[[:space:]_-]?(id|identifier)|sleep[[:space:]_-]?score|reports?' \
+            < <(
+              jq -r '
+                paths(type == "string") as $path |
+                select($path != ["run", "operator"]) |
+                getpath($path)
+              ' "$RUNNER_TEMP/evidence.json"
+            ); then
+            echo "Evidence contains prohibited sensitive data." >&2
+            exit 1
+          fi
+
+      - name: Verify trusted approval policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVAL_COMMENT_ID: ${{ inputs.approval_comment_id }}
+          REVIEWER_ALLOWLIST: ${{ vars.DEVICE_QUALIFICATION_REVIEWERS }}
+        run: |
+          set -euo pipefail
+          [[ "$APPROVAL_COMMENT_ID" =~ ^[0-9]+$ ]]
+          digest="$(sha256sum "$RUNNER_TEMP/evidence.json" | awk '{print $1}')"
+          expected_body="$(printf 'ASLEEP_DEVICE_QUALIFICATION_APPROVAL_V1\ncommit=%s\nevidence_sha256=%s' "$GITHUB_SHA" "$digest")"
+          comment="$(gh api "repos/$GITHUB_REPOSITORY/issues/comments/$APPROVAL_COMMENT_ID")"
+          reviewer="$(jq -er .user.login <<< "$comment")"
+          jq -e '
+            type == "array" and
+            length > 0 and
+            all(.[];
+              type == "string" and
+              test("^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
+            ) and
+            ([.[] | ascii_downcase] | length == (unique | length))
+          ' <<< "$REVIEWER_ALLOWLIST" > /dev/null
+          jq -e --arg reviewer "${reviewer,,}" 'map(ascii_downcase) | index($reviewer) != null' <<< "$REVIEWER_ALLOWLIST" > /dev/null
+          test "${reviewer,,}" != "${GITHUB_ACTOR,,}"
+          test "$(jq -r .body <<< "$comment")" = "$expected_body"
+          comment_updated_at="$(jq -er .updated_at <<< "$comment")"
+          completed_at="$(jq -er .run.completedAt "$RUNNER_TEMP/evidence.json")"
+          comment_updated_epoch="$(date -u -d "$comment_updated_at" +%s)"
+          completed_epoch="$(date -u -d "$completed_at" +%s)"
+          (( comment_updated_epoch >= completed_epoch ))
+          {
+            echo "EVIDENCE_SHA256=$digest"
+            echo "APPROVAL_REVIEWER=$reviewer"
+            echo "APPROVAL_CREATED_AT=$(jq -r .created_at <<< "$comment")"
+            echo "APPROVAL_UPDATED_AT=$(jq -r .updated_at <<< "$comment")"
+            echo "APPROVAL_COMMENT_ID=$APPROVAL_COMMENT_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Resolve candidate versions
+        run: |
+          package_version="$(awk '$1 == "version:" { print $2; exit }' pubspec.yaml)"
+          dart_version="$(dart --version 2>&1 | sed -E 's/^Dart SDK version: ([0-9.]+).*/\1/')"
+          android_native_version="$(sed -n 's/.*asleepsdk:\([0-9.]*\).*/\1/p' android/build.gradle.kts)"
+          ios_native_version="$(sed -n "s/.*AsleepSDK', '\\([0-9.]*\\)'.*/\\1/p" ios/asleep_sdk_flutter.podspec)"
+          {
+            printf 'PACKAGE_VERSION=%s\n' "$package_version"
+            printf 'DART_VERSION=%s\n' "$dart_version"
+            printf 'ANDROID_NATIVE_VERSION=%s\n' "$android_native_version"
+            printf 'IOS_NATIVE_VERSION=%s\n' "$ios_native_version"
+          } >> "$GITHUB_ENV"
+
+      - name: Validate release evidence
+        run: >-
+          dart run tool/validate_device_qualification.dart
+          --evidence "$RUNNER_TEMP/evidence.json"
+          --expected-commit "$GITHUB_SHA"
+          --expected-package-version "$PACKAGE_VERSION"
+          --expected-flutter-version "$FLUTTER_VERSION"
+          --expected-dart-version "$DART_VERSION"
+          --expected-android-native-version "$ANDROID_NATIVE_VERSION"
+          --expected-ios-native-version "$IOS_NATIVE_VERSION"
+          --expected-operator "${{ github.actor }}"
+
+      - name: Stage immutable evidence
+        run: |
+          mkdir -p "$RUNNER_TEMP/device-qualification"
+          cp "$RUNNER_TEMP/evidence.json" "$RUNNER_TEMP/device-qualification/evidence.json"
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/device-qualification/commit-sha.txt"
+          jq -n \
+            --arg commitSha "$GITHUB_SHA" \
+            --arg operator "$GITHUB_ACTOR" \
+            --arg runId "$GITHUB_RUN_ID" \
+            --arg evidenceSha256 "$EVIDENCE_SHA256" \
+            --arg reviewer "$APPROVAL_REVIEWER" \
+            --arg createdAt "$APPROVAL_CREATED_AT" \
+            --arg updatedAt "$APPROVAL_UPDATED_AT" \
+            --arg commentId "$APPROVAL_COMMENT_ID" \
+            '{commitSha: $commitSha, operator: $operator, workflowRunId: $runId, evidenceSha256: $evidenceSha256, reviewer: $reviewer, approvalCreatedAt: $createdAt, approvalUpdatedAt: $updatedAt, approvalCommentId: $commentId}' \
+            > "$RUNNER_TEMP/device-qualification/attestation.json"
+
+      - name: Upload exact-commit evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: device-qualification-${{ github.sha }}
+          path: ${{ runner.temp }}/device-qualification
+          if-no-files-found: error
+          retention-days: 90

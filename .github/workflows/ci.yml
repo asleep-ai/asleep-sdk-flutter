@@ -63,13 +63,19 @@ jobs:
       - name: Check formatting
         run: >-
           dart format --output=none --set-exit-if-changed
-          lib test example/lib example/test example/integration_test pigeons
+          lib test tool example/lib example/test example/integration_test pigeons
 
       - name: Analyze
         run: flutter analyze
 
       - name: Test package
         run: flutter test
+
+      - name: Validate incomplete qualification template
+        run: >-
+          dart run tool/validate_device_qualification.dart
+          --evidence qualification/evidence.template.json
+          --allow-incomplete
 
       - name: Test example
         working-directory: example

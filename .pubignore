@@ -7,6 +7,9 @@ build/
 coverage/
 doc/
 pigeons/
+qualification/
+tool/
+test/device_qualification_test.dart
 *.iml
 *.log
 **/local.properties
