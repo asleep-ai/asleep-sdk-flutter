@@ -6,7 +6,7 @@ Verified on: 2026-07-30
 
 | Layer | Experimental 0.1.0 baseline | Publication status |
 |---|---|---|
-| Dart package | `asleep_sdk_flutter` 0.1.0 | Experimental public version selected; `asleep.ai` verified publisher exists; first publish has not been performed |
+| Dart package | `asleep_sdk_flutter` 0.1.0 | Published publicly on pub.dev and owned by the verified `asleep.ai` publisher |
 | Dart SDK | `^3.12.2` | Experimental floor matching the verified toolchain; broader consumer-fleet validation remains |
 | Flutter | `>=3.44.0` | Experimental floor matching Dart 3.12.2; broader consumer-fleet validation remains |
 | Android | API 24, pinned `ai.asleep:asleepsdk:3.2.1` | Kotlin compile, lint, merged-manifest policy, and 16 Android bridge tests pass on the current implementation |
@@ -14,9 +14,9 @@ Verified on: 2026-07-30
 | Source distribution | Private GitHub repository, public pub.dev archive | `.pubignore` excludes internal `doc/` and Pigeon schema files from the archive |
 | License | Proprietary notice copied from the RN 1.2 package | Release owner approved applying the existing Asleep notice to this Flutter archive on 2026-07-30 |
 
-This repository contains the experimental 0.1.0 implementation candidate. It
-is not yet published, and the experimental label does not waive the legal,
-archive-review, release-CI, or runtime-QA gates below.
+This repository contains the source for the published experimental 0.1.0
+package. Publication does not waive the legal, archive-review, release-CI, or
+runtime-QA gates below for subsequent releases.
 
 ## Verified Source Snapshots
 

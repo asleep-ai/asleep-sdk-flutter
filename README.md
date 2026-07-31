@@ -235,18 +235,27 @@ approved.
 
 - Read the generated [Flutter API reference][api-reference] and the
   [Asleep developer guide][developer-guide].
-- Email [nocturne@asleep.ai][support-email] with an
-  `asleep_sdk_flutter` subject prefix for defects, integration questions, and
-  feature requests. [SUPPORT.md](SUPPORT.md) lists the required details and
-  experimental compatibility policy.
-- Report suspected vulnerabilities privately by following
-  [SECURITY.md](SECURITY.md). Do not send API keys, raw audio, sleep reports,
-  user identifiers, or other personal data in an initial report.
-- Read [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a source change.
+- For defects, integration questions, and feature requests, email
+  [nocturne@asleep.ai][support-email] with the package, Flutter, Dart, native
+  SDK, OS, and device versions; expected and actual behavior; a minimal
+  reproduction; and redacted logs.
+- Report suspected vulnerabilities privately to
+  [nocturne@asleep.ai][security-email]. Include affected versions, impact,
+  reproduction conditions, and a safe follow-up contact. Wait for a fix or an
+  agreed disclosure date before publishing details.
+- To propose a source contribution, first email
+  [nocturne@asleep.ai][contribution-email]. The private repository may be
+  shared after triage; a merged change does not guarantee an immediate release.
 
 The package source repository and its issue tracker are currently private, so
 they are intentionally omitted from public pub.dev metadata. The API reference
-above is the canonical public Flutter documentation URL.
+above is the canonical public Flutter documentation URL. Never send API keys,
+access tokens, raw audio, sleep reports, user identifiers, signing material, or
+other personal data through any intake route.
+
+This experimental `0.x` package has no response-time SLA. Minor releases may
+contain breaking changes; patch releases should remain compatible within their
+minor line. Security fixes are provided for the latest published minor line.
 
 ## License
 
@@ -255,4 +264,6 @@ redistribution require authorization from Asleep.
 
 [api-reference]: https://pub.dev/documentation/asleep_sdk_flutter/latest/
 [developer-guide]: https://docs-en.asleep.ai/docs/quickstart
-[support-email]: mailto:nocturne@asleep.ai
+[support-email]: mailto:nocturne@asleep.ai?subject=%5Basleep_sdk_flutter%20support%5D%20
+[security-email]: mailto:nocturne@asleep.ai?subject=%5Basleep_sdk_flutter%20security%5D%20
+[contribution-email]: mailto:nocturne@asleep.ai?subject=%5Basleep_sdk_flutter%20contribution%5D%20
