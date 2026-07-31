@@ -247,8 +247,11 @@ class DiagnosticController extends ChangeNotifier {
     _recoveryAwaitingUpload = true;
     _notify();
     try {
-      await _run('Foreground recovery requested', _client.resumeTracking);
-      if (_operationError != null) {
+      final resumed = await _runWithOutcome(
+        'Foreground recovery requested',
+        _client.resumeTracking,
+      );
+      if (!resumed) {
         _recoveryAwaitingUpload = false;
       }
     } finally {
@@ -261,8 +264,15 @@ class DiagnosticController extends ChangeNotifier {
     String successMessage,
     FutureOr<void> Function() action,
   ) async {
+    await _runWithOutcome(successMessage, action);
+  }
+
+  Future<bool> _runWithOutcome(
+    String successMessage,
+    FutureOr<void> Function() action,
+  ) async {
     if (_closed) {
-      return;
+      return false;
     }
     _operationError = null;
     _operationMessage = null;
@@ -270,6 +280,8 @@ class DiagnosticController extends ChangeNotifier {
     try {
       await action();
       _operationMessage = successMessage;
+      _notify();
+      return true;
     } on AsleepException catch (error) {
       _operationError = error.error ?? _client.state.error;
       _operationMessage = 'Operation failed';
@@ -283,6 +295,7 @@ class DiagnosticController extends ChangeNotifier {
       _operationMessage = 'Operation failed';
     }
     _notify();
+    return false;
   }
 
   Future<T?> _runValue<T>(Future<T> Function() action) async {

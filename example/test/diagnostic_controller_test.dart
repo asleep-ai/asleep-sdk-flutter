@@ -230,6 +230,47 @@ void main() {
     );
 
     test(
+      'unrelated command failure does not clear a successful resume latch',
+      () async {
+        final platform = _FakePlatform()
+          ..restoreResult = const RestoreResult(hasActiveSession: true)
+          ..resumeCompleter = Completer<void>();
+        final controller = _controller(
+          platform,
+          hostPlatform: DiagnosticHostPlatform.ios,
+        );
+        await controller.initializeOrRestore('runtime-secret');
+        platform.emit(
+          TrackingFailedEvent(
+            error: AsleepError(
+              code: 'CANNOT_ACTIVATE_IN_BACKGROUND',
+              message: 'Foreground required',
+              category: AsleepErrorCategory.recoveryRequired,
+            ),
+          ),
+        );
+
+        final recovery = controller.handleLifecycleState(
+          AppLifecycleState.resumed,
+        );
+        await Future<void>.delayed(Duration.zero);
+        platform.reportError = StateError('report failed');
+        await controller.loadReport('session-1');
+        platform.resumeCompleter!.complete();
+        await recovery;
+
+        expect(controller.recoveryAwaitingUpload, isTrue);
+        await controller.handleLifecycleState(AppLifecycleState.resumed);
+        expect(platform.resumeCount, 1);
+
+        platform.emit(const TrackingUploadedEvent(sequence: 1));
+        expect(controller.recoveryAwaitingUpload, isFalse);
+
+        await controller.close();
+      },
+    );
+
+    test(
       'terminal and recording-dead failures release the recovery latch',
       () async {
         for (final category in <AsleepErrorCategory>[
@@ -495,6 +536,7 @@ class _FakePlatform implements AsleepPlatform {
   Object? reportError;
   AsleepAnalysisResult? analysisResult;
   Completer<void>? loggingEnableCompleter;
+  Completer<void>? resumeCompleter;
   bool echoSetupKeyInError = false;
   String? setupApiKey;
   String? configuredApiKey;
@@ -565,6 +607,7 @@ class _FakePlatform implements AsleepPlatform {
   Future<void> resumeTracking() async {
     calls.add('resume');
     resumeCount++;
+    await resumeCompleter?.future;
   }
 
   @override
