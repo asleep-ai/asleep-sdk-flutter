@@ -136,30 +136,121 @@ evidence_sha256=<SHA-256 of evidence.json>
 
 Set `DEVICE_QUALIFICATION_REVIEWERS` to a non-empty JSON array of unique,
 non-empty GitHub logins. Login uniqueness and membership are
-case-insensitive. Then dispatch the workflow from a branch or tag resolving to
-the candidate:
+case-insensitive.
+
+The evidence must enter Actions only through the temporary repository secret
+`DEVICE_QUALIFICATION_EVIDENCE_JSON`. Run one qualification dispatch at a
+time. The approval digest binds the secret bytes to the candidate, so a
+concurrent secret replacement fails closed. Use this sequence from a checkout
+at the exact candidate:
 
 ```sh
+set -eu
+qualification_repo=asleep-ai/asleep-sdk-flutter
+evidence_path=/secure/path/evidence.json
 candidate_ref=main
-test "$(git rev-parse "$candidate_ref")" = "$(git rev-parse HEAD)"
-evidence_base64="$(base64 < /secure/path/evidence.json | tr -d '\n')"
-gh workflow run device-qualification.yml \
-  --ref "$candidate_ref" \
-  -f evidence_base64="$evidence_base64" \
-  -f approval_comment_id="<same-repository comment ID>"
-unset candidate_ref evidence_base64
+approval_comment_id="<same-repository comment ID>"
+candidate_sha="$(git rev-parse "$candidate_ref")"
+test "$candidate_sha" = "$(git rev-parse HEAD)"
+
+# gh secret set removes trailing CR/LF bytes. Prepare the exact bytes used for
+# both the approval digest and the secret without storing them in a shell value.
+secret_input="$(mktemp)"
+chmod 600 "$secret_input"
+perl -0pe 's/[\r\n]+\z//' "$evidence_path" > "$secret_input"
+test -s "$secret_input"
+test "$(wc -c < "$secret_input" | tr -d ' ')" -le 49152
+evidence_digest="$(shasum -a 256 "$secret_input" | awk '{print $1}')"
+printf 'ASLEEP_DEVICE_QUALIFICATION_APPROVAL_V1\ncommit=%s\nevidence_sha256=%s\n' \
+  "$candidate_sha" "$evidence_digest"
+
+cleanup_qualification_material() {
+  rm -f "$secret_input"
+  secret_count="$(
+    gh secret list \
+      --repo "$qualification_repo" \
+      --json name \
+      --jq 'map(select(.name == "DEVICE_QUALIFICATION_EVIDENCE_JSON")) | length'
+  )" || {
+    echo "WARNING: verify DEVICE_QUALIFICATION_EVIDENCE_JSON manually." >&2
+    return
+  }
+  if test "$secret_count" -ne 0 &&
+    ! gh secret delete DEVICE_QUALIFICATION_EVIDENCE_JSON \
+      --repo "$qualification_repo"; then
+    echo "WARNING: delete DEVICE_QUALIFICATION_EVIDENCE_JSON manually." >&2
+  fi
+}
+
+# After an allowlisted reviewer posts exactly the printed body:
+test "$(
+  gh secret list \
+    --repo "$qualification_repo" \
+    --json name \
+    --jq 'map(select(.name == "DEVICE_QUALIFICATION_EVIDENCE_JSON")) | length'
+)" -eq 0
+trap cleanup_qualification_material EXIT INT TERM
+gh secret set DEVICE_QUALIFICATION_EVIDENCE_JSON \
+  --repo "$qualification_repo" < "$secret_input"
+
+qualification_dispatch_output="$(
+  gh workflow run device-qualification.yml \
+    --repo "$qualification_repo" \
+    --ref "$candidate_ref" \
+    -f approval_comment_id="$approval_comment_id"
+)"
+qualification_run_url="$(
+  printf '%s\n' "$qualification_dispatch_output" |
+    awk '/^https:\/\/github\.com\/asleep-ai\/asleep-sdk-flutter\/actions\/runs\/[0-9]+$/ { url = $0 } END { print url }'
+)"
+unset qualification_dispatch_output
+test -n "$qualification_run_url"
+qualification_run_id="${qualification_run_url##*/}"
+case "$qualification_run_id" in
+  ''|*[!0-9]*) exit 1 ;;
+esac
+
+# Repository secrets are snapshotted when a run is queued, so remove the
+# temporary secret before waiting for the exact run returned by the dispatch.
+gh secret delete DEVICE_QUALIFICATION_EVIDENCE_JSON \
+  --repo "$qualification_repo"
+test "$(
+  gh secret list \
+    --repo "$qualification_repo" \
+    --json name \
+    --jq 'map(select(.name == "DEVICE_QUALIFICATION_EVIDENCE_JSON")) | length'
+)" -eq 0
+rm -f "$secret_input"
+trap - EXIT INT TERM
+
+gh run watch "$qualification_run_id" \
+  --repo "$qualification_repo" \
+  --exit-status
+
+unset approval_comment_id candidate_ref candidate_sha evidence_digest \
+  evidence_path qualification_repo qualification_run_id qualification_run_url \
+  secret_input
 ```
 
-The workflow accepts only a digits-only comment ID, strictly parses the JSON
-reviewer allowlist, obtains the actual comment author from GitHub, and requires
-a case-insensitively distinct `github.actor`. The approval comment's parsed
+The evidence file is streamed directly into the encrypted secret and is never
+stored in a workflow-dispatch input or shell value. GitHub limits repository
+secrets to 48 KB, which the sequence checks before upload. The secret exists
+only until the run has been queued; the sequence then deletes it, verifies its
+absence, and watches the exact run URL returned by the dispatch. If interrupted
+before explicit deletion, the trap attempts cleanup and prints a warning if
+manual deletion is required. The workflow fails when the secret is absent,
+empty, invalid JSON, sensitive, or inconsistent with the approval digest. It
+accepts only a digits-only comment ID, strictly parses the JSON reviewer
+allowlist, obtains the actual comment author from GitHub, and requires a
+case-insensitively distinct `github.actor`. The approval comment's parsed
 timestamp must be at or after the evidence completion timestamp. The workflow
 binds the exact comment, reviewer, operator, commit, and evidence digest into
-an immutable run attestation. A release re-fetches the same-repository comment
-and workflow run, rechecks the timestamps as parsed instants, and fails if the
-comment was edited/deleted, the allowlist changed, or any reviewer, operator,
-digest, or run provenance differs. This works for private repositories on the
-GitHub Team plan without environment reviewer support.
+an immutable run attestation. Only validated evidence enters the 90-day
+artifact. A release re-fetches the same-repository comment and workflow run,
+rechecks the timestamps as parsed instants, and fails if the comment was
+edited/deleted, the allowlist changed, or any reviewer, operator, digest, or
+run provenance differs. This works for private repositories on the GitHub Team
+plan without environment reviewer support.
 
 Ordinary pull-request CI validates only the incomplete template structure and
 unit tests. It needs no device, QA API key, or release evidence.
