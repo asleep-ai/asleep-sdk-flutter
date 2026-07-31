@@ -628,6 +628,95 @@ void main() {
       expect(client.state.setupStatus, SetupStatus.complete);
     });
 
+    test(
+      'recovers state and permits retry after initialization timeout',
+      () async {
+        platform.setupCompleter = Completer<void>();
+        final initialization = client.initialize(
+          const AsleepSetupOptions(apiKey: 'test-api-key'),
+        );
+        await pumpEventQueue();
+
+        await expectLater(
+          client.initialize(
+            const AsleepSetupOptions(apiKey: 'concurrent-api-key'),
+          ),
+          throwsInvalidStateContaining('already in progress'),
+        );
+
+        platform.setupCompleter!.completeError(
+          const AsleepException(
+            AsleepErrorCode.nativeFailure,
+            'The native Asleep SDK did not complete setup within 30 seconds',
+            nativeCode: 'INITIALIZATION_TIMEOUT',
+            nativeDetails: <String, Object?>{
+              'phase': 'setup',
+              'timeoutSeconds': 30,
+              'platform': 'ios',
+            },
+          ),
+        );
+        await expectLater(
+          initialization,
+          throwsA(
+            isA<AsleepException>().having(
+              (error) => error.nativeCode,
+              'nativeCode',
+              'INITIALIZATION_TIMEOUT',
+            ),
+          ),
+        );
+
+        expect(client.state.setupStatus, SetupStatus.idle);
+        expect(client.state.error?.code, 'INITIALIZATION_TIMEOUT');
+        expect(client.state.error?.platformDetails['phase'], 'setup');
+
+        platform.setupCompleter = null;
+        await client.initialize(
+          const AsleepSetupOptions(apiKey: 'retry-api-key'),
+        );
+
+        expect(platform.setupCount, 2);
+        expect(client.state.setupStatus, SetupStatus.complete);
+        expect(client.state.error, isNull);
+      },
+    );
+
+    test('permits configure retry after native join timeout', () async {
+      await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
+      platform.configureCompleter = Completer<void>();
+      final configuration = client.configure(
+        const AsleepConfiguration(apiKey: 'replacement-api-key'),
+      );
+      await pumpEventQueue();
+
+      platform.configureCompleter!.completeError(
+        const AsleepException(
+          AsleepErrorCode.nativeFailure,
+          'The native Asleep SDK did not complete configuration within 30 seconds',
+          nativeCode: 'INITIALIZATION_TIMEOUT',
+          nativeDetails: <String, Object?>{
+            'phase': 'configuration',
+            'timeoutSeconds': 30,
+            'platform': 'ios',
+          },
+        ),
+      );
+      await expectLater(configuration, throwsA(isA<AsleepException>()));
+
+      expect(client.state.setupStatus, SetupStatus.idle);
+      expect(client.state.error?.code, 'INITIALIZATION_TIMEOUT');
+
+      platform.configureCompleter = null;
+      await client.configure(
+        const AsleepConfiguration(apiKey: 'retry-api-key'),
+      );
+
+      expect(platform.configureCount, 2);
+      expect(client.state.setupStatus, SetupStatus.complete);
+      expect(client.state.error, isNull);
+    });
+
     test('suppresses duplicate setup-complete snapshots', () async {
       platform.emitSetupCompletedBeforeReturn = true;
       var completedSnapshots = 0;
@@ -1127,6 +1216,8 @@ class FakeAsleepPlatform extends AsleepPlatform {
   Object? startError;
   Object? disposeError;
   Completer<void>? startCompleter;
+  Completer<void>? setupCompleter;
+  Completer<void>? configureCompleter;
   Completer<void>? stopCompleter;
   Completer<void>? resumeCompleter;
   Completer<RestoreResult>? restoreCompleter;
@@ -1165,6 +1256,7 @@ class FakeAsleepPlatform extends AsleepPlatform {
     if (setupError case final error?) {
       throw error;
     }
+    await setupCompleter?.future;
   }
 
   @override
@@ -1176,6 +1268,7 @@ class FakeAsleepPlatform extends AsleepPlatform {
     if (configureError case final error?) {
       throw error;
     }
+    await configureCompleter?.future;
   }
 
   @override

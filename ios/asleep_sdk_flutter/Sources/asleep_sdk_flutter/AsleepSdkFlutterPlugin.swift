@@ -1,5 +1,5 @@
-import AsleepSDK
 import AVFoundation
+import AsleepSDK
 import Flutter
 import Foundation
 
@@ -69,6 +69,60 @@ func trackingStartRecoveryRequiredError() -> PigeonError {
   )
 }
 
+protocol IosEventEmitting: AnyObject {
+  func emit(
+    type: String,
+    payloadJson: String,
+    completion: (() -> Void)?
+  )
+}
+
+struct IosNativeSdkActions {
+  let setLogger: (AsleepLogger) -> Void
+  let setup:
+    (
+      String,
+      URL?,
+      URL?,
+      String?,
+      Bool,
+      AsleepSetupDelegate
+    ) -> Void
+  let configure:
+    (
+      String?,
+      String?,
+      URL?,
+      URL?,
+      String?,
+      AsleepConfigDelegate
+    ) -> Void
+
+  static let live = IosNativeSdkActions(
+    setLogger: { Asleep.setLogger($0) },
+    setup: { apiKey, baseURL, callbackURL, service, enableODA, delegate in
+      Asleep.setup(
+        apiKey: apiKey,
+        baseUrl: baseURL,
+        callbackUrl: callbackURL,
+        service: service,
+        enableODA: enableODA,
+        delegate: delegate
+      )
+    },
+    configure: { apiKey, userId, baseURL, callbackURL, service, delegate in
+      Asleep.initAsleepConfig(
+        apiKey: apiKey,
+        userId: userId,
+        baseUrl: baseURL,
+        callbackUrl: callbackURL,
+        service: service,
+        delegate: delegate
+      )
+    }
+  )
+}
+
 public final class AsleepSdkFlutterPlugin: NSObject, FlutterPlugin {
   private let events = IosEventsStreamHandler()
   private lazy var hostApi = IosAsleepHostApi(events: events)
@@ -94,7 +148,7 @@ public final class AsleepSdkFlutterPlugin: NSObject, FlutterPlugin {
   }
 }
 
-private final class IosEventsStreamHandler: EventsStreamHandler {
+private final class IosEventsStreamHandler: EventsStreamHandler, IosEventEmitting {
   private var sink: PigeonEventSink<NativeEventMessage>?
 
   override func onListen(
@@ -134,17 +188,24 @@ private final class IosEventsStreamHandler: EventsStreamHandler {
   }
 }
 
-private final class IosAsleepHostApi: NSObject, AsleepHostApi {
-  private let events: IosEventsStreamHandler
+final class IosAsleepHostApi: NSObject, AsleepHostApi {
+  private struct SetupContext {
+    let attemptID: UInt64
+    let message: SetupMessage
+    let baseURL: URL?
+    let callbackURL: URL?
+  }
+
+  private let events: IosEventEmitting
+  private let nativeSdk: IosNativeSdkActions
+  private let initializationCoordinator: InitializationAttemptCoordinator
   private var trackingManager: Asleep.SleepTrackingManager?
   private var reportManager: Asleep.Reports?
   private var config: Asleep.Config?
-  private var setupCompletion: ((Result<Void, Error>) -> Void)?
-  private var setupMessage: SetupMessage?
-  private var setupBaseURL: URL?
-  private var setupCallbackURL: URL?
-  private var configuringFromSetup = false
-  private var configureCompletion: ((Result<Void, Error>) -> Void)?
+  private var setupContext: SetupContext?
+  private var setupDelegate: SetupAttemptDelegate?
+  private var configDelegate: ConfigAttemptDelegate?
+  private var acceptedConfigAttemptID: UInt64?
   private var loggingEnabled = false
   private var initializationInFlight = false
   private var trackingActive = false
@@ -155,8 +216,18 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
   private var trackingStartRecoveryGate = TrackingStartRecoveryGate()
   private var detached = false
 
-  init(events: IosEventsStreamHandler) {
+  init(
+    events: IosEventEmitting,
+    nativeSdk: IosNativeSdkActions = .live,
+    initializationScheduler: InitializationScheduling = DispatchInitializationScheduler(),
+    initializationTimeout: TimeInterval = InitializationAttemptCoordinator.defaultTimeout
+  ) {
     self.events = events
+    self.nativeSdk = nativeSdk
+    initializationCoordinator = InitializationAttemptCoordinator(
+      scheduler: initializationScheduler,
+      timeout: initializationTimeout
+    )
   }
 
   func setup(
@@ -173,23 +244,43 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
       return
     }
     guard claimNativeSdk(completion) else { return }
-    guard setupCompletion == nil, configureCompletion == nil else {
+    guard !initializationCoordinator.hasActiveAttempt else {
       completion(.failure(BridgeError.configurationInProgress))
       return
     }
-    setupCompletion = completion
-    setupMessage = message
-    setupBaseURL = baseURL
-    setupCallbackURL = callbackURL
+    guard
+      let attemptID = initializationCoordinator.begin(
+        phase: .setup,
+        completion: { [weak self] attemptID, result in
+          self?.finishInitialization(
+            attemptID: attemptID,
+            startedFromSetup: true,
+            result: result,
+            completion: completion
+          )
+        }
+      )
+    else {
+      completion(.failure(BridgeError.configurationInProgress))
+      return
+    }
+    setupContext = SetupContext(
+      attemptID: attemptID,
+      message: message,
+      baseURL: baseURL,
+      callbackURL: callbackURL
+    )
     initializationInFlight = true
-    Asleep.setLogger(self)
-    Asleep.setup(
-      apiKey: message.apiKey,
-      baseUrl: baseURL,
-      callbackUrl: callbackURL,
-      service: message.service,
-      enableODA: message.enableOnDeviceAnalysis,
-      delegate: self
+    nativeSdk.setLogger(self)
+    let delegate = SetupAttemptDelegate(owner: self, attemptID: attemptID)
+    setupDelegate = delegate
+    nativeSdk.setup(
+      message.apiKey,
+      baseURL,
+      callbackURL,
+      message.service,
+      message.enableOnDeviceAnalysis,
+      delegate
     )
   }
 
@@ -207,19 +298,37 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
       return
     }
     guard claimNativeSdk(completion) else { return }
-    guard setupCompletion == nil, configureCompletion == nil else {
+    guard !initializationCoordinator.hasActiveAttempt else {
       completion(.failure(BridgeError.configurationInProgress))
       return
     }
-    configureCompletion = completion
+    guard
+      let attemptID = initializationCoordinator.begin(
+        phase: .configuration,
+        completion: { [weak self] attemptID, result in
+          self?.finishInitialization(
+            attemptID: attemptID,
+            startedFromSetup: false,
+            result: result,
+            completion: completion
+          )
+        }
+      )
+    else {
+      completion(.failure(BridgeError.configurationInProgress))
+      return
+    }
     initializationInFlight = true
-    Asleep.setLogger(self)
-    Asleep.initAsleepConfig(
-      apiKey: message.apiKey,
-      userId: message.userId,
-      baseUrl: baseURL,
-      callbackUrl: callbackURL,
-      delegate: self
+    nativeSdk.setLogger(self)
+    let delegate = ConfigAttemptDelegate(owner: self, attemptID: attemptID)
+    configDelegate = delegate
+    nativeSdk.configure(
+      message.apiKey,
+      message.userId,
+      baseURL,
+      callbackURL,
+      nil,
+      delegate
     )
   }
 
@@ -470,14 +579,11 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
 
   func detach() {
     detached = true
-    setupCompletion?(.failure(BridgeError.engineDetached))
-    setupCompletion = nil
-    setupMessage = nil
-    setupBaseURL = nil
-    setupCallbackURL = nil
-    configuringFromSetup = false
-    configureCompletion?(.failure(BridgeError.engineDetached))
-    configureCompletion = nil
+    initializationCoordinator.detach(error: BridgeError.engineDetached)
+    setupContext = nil
+    setupDelegate = nil
+    configDelegate = nil
+    acceptedConfigAttemptID = nil
     finishTrackingStart(.failure(BridgeError.engineDetached))
     trackingStartRecoveryGate.didTerminate()
     trackingManager = nil
@@ -488,11 +594,42 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
     releaseNativeSdkIfIdle()
   }
 
-  private func finishConfiguration(_ result: Result<Void, Error>) {
-    configureCompletion?(result)
-    configureCompletion = nil
+  private func finishInitialization(
+    attemptID: UInt64,
+    startedFromSetup: Bool,
+    result: Result<Void, Error>,
+    completion: (Result<Void, Error>) -> Void
+  ) {
+    if case .failure(let error) = result,
+      let pigeonError = error as? PigeonError,
+      pigeonError.code == "INITIALIZATION_TIMEOUT",
+      !detached
+    {
+      let details = pigeonError.details as? [String: Any] ?? [:]
+      let payload: [String: Any] = [
+        "code": pigeonError.code,
+        "message": pigeonError.message ?? "Native initialization timed out",
+        "platformDetails": details,
+      ]
+      if details["phase"] as? String == InitializationPhase.configuration.rawValue {
+        emit("onUserJoinFailed", payload)
+      }
+      if startedFromSetup {
+        emit("onSetupDidFail", payload)
+      } else if details["phase"] as? String != InitializationPhase.configuration.rawValue {
+        emit("onUserJoinFailed", payload)
+      }
+    }
+    if setupContext?.attemptID == attemptID {
+      setupContext = nil
+    }
+    setupDelegate = nil
+    if acceptedConfigAttemptID != attemptID {
+      configDelegate = nil
+    }
     initializationInFlight = false
     releaseNativeSdkIfIdle()
+    completion(result)
   }
 
   private func finishTrackingStart(_ result: Result<Void, Error>) {
@@ -559,7 +696,7 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
   }
 
   private func emitJSON(_ type: String, _ payloadJson: String) {
-    events.emit(type: type, payloadJson: payloadJson)
+    events.emit(type: type, payloadJson: payloadJson, completion: nil)
   }
 
   private func errorPayload(
@@ -614,82 +751,147 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
   }
 }
 
-extension IosAsleepHostApi: AsleepSetupDelegate {
-  func setupDidComplete() {
-    guard !detached else { return }
+extension IosAsleepHostApi {
+  func setupDidComplete(attemptID: UInt64) {
     guard
-      let message = setupMessage,
-      let completion = setupCompletion
+      !detached,
+      initializationCoordinator.isCurrent(attemptID, phase: .setup)
     else {
-      initializationInFlight = false
-      releaseNativeSdkIfIdle()
       return
     }
-    setupMessage = nil
-    setupCompletion = nil
-    configuringFromSetup = true
-    configureCompletion = completion
-    let baseURL = setupBaseURL
-    let callbackURL = setupCallbackURL
-    setupBaseURL = nil
-    setupCallbackURL = nil
-    Asleep.initAsleepConfig(
-      apiKey: message.apiKey,
-      userId: nil,
-      baseUrl: baseURL,
-      callbackUrl: callbackURL,
-      delegate: self
+    guard
+      let context = setupContext,
+      context.attemptID == attemptID
+    else {
+      _ = initializationCoordinator.fail(
+        attemptID,
+        error: BridgeError.initializationStateLost
+      )
+      return
+    }
+    guard initializationCoordinator.advance(attemptID, to: .configuration) else {
+      return
+    }
+    setupDelegate = nil
+    let delegate = ConfigAttemptDelegate(owner: self, attemptID: attemptID)
+    configDelegate = delegate
+    nativeSdk.configure(
+      context.message.apiKey,
+      nil,
+      context.baseURL,
+      context.callbackURL,
+      context.message.service,
+      delegate
     )
   }
 
-  func setupDidFail(error: Asleep.AsleepError) {
-    guard !detached else { return }
+  func setupDidFail(attemptID: UInt64, error: Asleep.AsleepError) {
+    guard
+      !detached,
+      initializationCoordinator.isCurrent(attemptID, phase: .setup)
+    else {
+      return
+    }
     emit("onSetupDidFail", errorPayload(error, fallbackCode: "SETUP_FAILED"))
-    setupCompletion?(.failure(transportError(error)))
-    setupCompletion = nil
-    setupMessage = nil
-    setupBaseURL = nil
-    setupCallbackURL = nil
-    initializationInFlight = false
-    releaseNativeSdkIfIdle()
+    _ = initializationCoordinator.fail(attemptID, error: transportError(error))
   }
 
-  func setupInProgress(progress: Int) {
-    guard !detached else { return }
+  func setupInProgress(attemptID: UInt64, progress: Int) {
+    guard
+      !detached,
+      initializationCoordinator.isCurrent(attemptID, phase: .setup)
+    else {
+      return
+    }
     emit("onSetupInProgress", ["progress": progress])
   }
-}
 
-extension IosAsleepHostApi: AsleepConfigDelegate {
-  func userDidJoin(userId: String, config: Asleep.Config) {
-    guard !detached else { return }
+  func userDidJoin(
+    attemptID: UInt64,
+    userId: String,
+    config: Asleep.Config
+  ) {
+    guard
+      !detached,
+      initializationCoordinator.isCurrent(attemptID, phase: .configuration)
+    else {
+      return
+    }
     self.config = config
     trackingManager = Asleep.createSleepTrackingManager(config: config, delegate: self)
     reportManager = Asleep.createReports(config: config)
+    acceptedConfigAttemptID = attemptID
     emit("onUserJoined", ["userId": userId])
-    if configuringFromSetup {
-      configuringFromSetup = false
+    if setupContext?.attemptID == attemptID {
       emit("onSetupDidComplete")
     }
-    finishConfiguration(.success(()))
+    _ = initializationCoordinator.succeed(attemptID)
   }
 
-  func didFailUserJoin(error: Asleep.AsleepError) {
-    guard !detached else { return }
+  func didFailUserJoin(attemptID: UInt64, error: Asleep.AsleepError) {
+    guard
+      !detached,
+      initializationCoordinator.isCurrent(attemptID, phase: .configuration)
+    else {
+      return
+    }
     emit(
       "onUserJoinFailed",
       errorPayload(error, fallbackCode: "INITIALIZATION_FAILED")
     )
-    if configuringFromSetup {
-      configuringFromSetup = false
+    if setupContext?.attemptID == attemptID {
       emit("onSetupDidFail", errorPayload(error, fallbackCode: "INIT_CONFIG_FAILED"))
     }
-    finishConfiguration(.failure(transportError(error)))
+    _ = initializationCoordinator.fail(attemptID, error: transportError(error))
+  }
+
+  func userDidDelete(attemptID: UInt64, userId: String) {
+    guard !detached, acceptedConfigAttemptID == attemptID else { return }
+    emit("onUserDeleted", ["userId": userId])
+  }
+}
+
+private final class SetupAttemptDelegate: AsleepSetupDelegate {
+  private weak var owner: IosAsleepHostApi?
+  private let attemptID: UInt64
+
+  init(owner: IosAsleepHostApi, attemptID: UInt64) {
+    self.owner = owner
+    self.attemptID = attemptID
+  }
+
+  func setupDidComplete() {
+    owner?.setupDidComplete(attemptID: attemptID)
+  }
+
+  func setupDidFail(error: Asleep.AsleepError) {
+    owner?.setupDidFail(attemptID: attemptID, error: error)
+  }
+
+  func setupInProgress(progress: Int) {
+    owner?.setupInProgress(attemptID: attemptID, progress: progress)
+  }
+}
+
+private final class ConfigAttemptDelegate: AsleepConfigDelegate {
+  private weak var owner: IosAsleepHostApi?
+  private let attemptID: UInt64
+
+  init(owner: IosAsleepHostApi, attemptID: UInt64) {
+    self.owner = owner
+    self.attemptID = attemptID
+  }
+
+  func userDidJoin(userId: String, config: Asleep.Config) {
+    owner?.userDidJoin(attemptID: attemptID, userId: userId, config: config)
+  }
+
+  func didFailUserJoin(error: Asleep.AsleepError) {
+    owner?.didFailUserJoin(attemptID: attemptID, error: error)
   }
 
   func userDidDelete(userId: String) {
-    guard !detached else { return }
-    emit("onUserDeleted", ["userId": userId])
+    owner?.userDidDelete(attemptID: attemptID, userId: userId)
   }
 }
 
@@ -821,6 +1023,7 @@ extension IosAsleepHostApi: AsleepLogger {
 
 private enum BridgeError: LocalizedError {
   case configurationInProgress
+  case initializationStateLost
   case anotherEngineOwnsNativeSdk
   case nativeSdkNotOwned
   case trackingManagerUnavailable
@@ -838,6 +1041,8 @@ private enum BridgeError: LocalizedError {
     switch self {
     case .configurationInProgress:
       return "Configuration is already in progress"
+    case .initializationStateLost:
+      return "Native initialization state was lost before completion"
     case .anotherEngineOwnsNativeSdk:
       return "The Asleep native SDK is already owned by another Flutter engine"
     case .nativeSdkNotOwned:

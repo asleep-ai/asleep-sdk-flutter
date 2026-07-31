@@ -114,6 +114,13 @@ The native Asleep SDK is process-global. Exactly one Flutter engine may own it
 at a time. The first engine that initializes or configures the SDK owns it until
 that engine detaches; another engine receives an immediate native failure.
 
+On iOS, each native setup phase and user-join/configuration phase has a
+30-second completion bound. A timeout rejects the command with native code
+`INITIALIZATION_TIMEOUT`; its details identify the timed-out phase as `setup`
+or `configuration`. The client returns to an uninitialized state and the same
+engine may retry. Attempt-specific native delegates quarantine callbacks from
+the timed-out attempt, so they cannot complete or mutate a newer retry.
+
 ## Permissions and platform configuration
 
 The plugin checks and requests permissions separately. `startTracking()` never

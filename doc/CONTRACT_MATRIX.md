@@ -155,6 +155,11 @@ depend on Riverpod, Bloc, Signals, or another application state framework.
 
 - The consuming application must provide
   `NSMicrophoneUsageDescription` and the `audio` background mode.
+- Setup and user join/configuration each have a 30-second native completion
+  bound. A timed-out attempt fails with `INITIALIZATION_TIMEOUT`, returns the
+  Dart client to an uninitialized state, and may be retried by the same engine.
+  Each native delegate is scoped to one attempt, so a late callback is ignored
+  instead of completing or mutating a newer retry.
 - The SDK owns its recording `AVAudioSession` lifecycle while tracking.
 - `iosAudioSessionOptions` are additive options:
   `duckOthers`, `allowAirPlay`, `allowBluetooth`, and
