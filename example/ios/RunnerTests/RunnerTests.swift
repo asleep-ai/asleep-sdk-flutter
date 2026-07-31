@@ -238,6 +238,8 @@ class RunnerTests: XCTestCase {
     XCTAssertEqual(firstResults.count, 1)
     XCTAssertEqual(events.types, ["onSetupDidFail"])
     XCTAssertEqual(events.payloads[0]["code"] as? String, "INITIALIZATION_TIMEOUT")
+    XCTAssertEqual(events.payloads[0]["phase"] as? String, "setup")
+    XCTAssertNil(events.payloads[0]["platformDetails"])
 
     var secondResults: [Result<Void, Error>] = []
     host.setup(
@@ -476,6 +478,11 @@ class RunnerTests: XCTestCase {
       events.payloads.map { $0["code"] as? String },
       ["INITIALIZATION_TIMEOUT", "INITIALIZATION_TIMEOUT"]
     )
+    XCTAssertEqual(
+      events.payloads.map { $0["phase"] as? String },
+      ["configuration", "configuration"]
+    )
+    XCTAssertTrue(events.payloads.allSatisfy { $0["platformDetails"] == nil })
 
     var retryResults: [Result<Void, Error>] = []
     host.configure(

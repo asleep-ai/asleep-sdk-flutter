@@ -745,11 +745,10 @@ final class IosAsleepHostApi: NSObject, AsleepHostApi {
       !detached
     {
       let details = pigeonError.details as? [String: Any] ?? [:]
-      let payload: [String: Any] = [
-        "code": pigeonError.code,
-        "message": pigeonError.message ?? "Native initialization timed out",
-        "platformDetails": details,
-      ]
+      var payload = details
+      payload["code"] = pigeonError.code
+      payload["message"] =
+        pigeonError.message ?? "Native initialization timed out"
       if details["phase"] as? String == InitializationPhase.configuration.rawValue {
         emit("onUserJoinFailed", payload)
       }
