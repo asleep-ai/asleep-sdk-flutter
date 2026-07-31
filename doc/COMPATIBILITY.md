@@ -1,22 +1,52 @@
 # Compatibility and Release Readiness
 
-Verified on: 2026-07-30
+Verified on: 2026-07-31
 
 ## Status Summary
 
 | Layer | Experimental 0.1.0 baseline | Publication status |
 |---|---|---|
 | Dart package | `asleep_sdk_flutter` 0.1.0 | Published publicly on pub.dev and owned by the verified `asleep.ai` publisher |
-| Dart SDK | `^3.12.2` | Experimental floor matching the verified toolchain; broader consumer-fleet validation remains |
-| Flutter | `>=3.44.0` | Experimental floor matching Dart 3.12.2; broader consumer-fleet validation remains |
+| Dart SDK | `^3.12.2` | Flutter 3.44.2 and 3.44.8 both bundle Dart 3.12.2 |
+| Flutter | `>=3.44.2` | 3.44.2 is the tested minimum; 3.44.8 is the tested current stable |
 | Android | API 24, pinned `ai.asleep:asleepsdk:3.2.1` | Kotlin compile, lint, merged-manifest policy, and 16 Android bridge tests pass on the current implementation |
 | iOS | iOS 15, pinned `AsleepSDK` 3.2.0, CocoaPods-only | Existing commercial runtime baseline; wrapper pod lint and unsigned release build pass, with a native privacy-manifest follow-up |
-| Source distribution | Private GitHub repository, public pub.dev archive | `.pubignore` excludes internal `doc/` and Pigeon schema files from the archive |
+| Source distribution | Private GitHub repository and public pub.dev archive | `.pubignore` excludes internal `doc/` and Pigeon schema files from the archive |
 | License | Proprietary notice copied from the RN 1.2 package | Release owner approved applying the existing Asleep notice to this Flutter archive on 2026-07-30 |
 
 This repository contains the source for the published experimental 0.1.0
 package. Publication does not waive the legal, archive-review, release-CI, or
 runtime-QA gates below for subsequent releases.
+
+## Consumer Toolchain Contract
+
+The experimental 0.1.x line supports the verified configurations below. A
+version being accepted by a broad package constraint is not a claim that every
+future Flutter, Android, or Apple toolchain is already supported.
+
+| Layer | Supported 0.1.x baseline | Verification |
+|---|---|---|
+| Flutter / Dart | Flutter 3.44.2 and 3.44.8 / Dart 3.12.2 | Minimum-toolchain analysis and package tests; current-toolchain package, example, and clean-consumer checks |
+| Android build | AGP 9.0.1, Gradle 9.1.0, Kotlin 2.3.20, JDK 17 | Clean generated app and repository example compile with Android SDK 36 |
+| Android runtime target | Minimum API 24; compile/target API 36 | Plugin manifest and clean-consumer APK merge/build |
+| Apple build | Xcode 26.5 in CI, Xcode 26.6 locally, CocoaPods 1.17.0, Swift 5 language mode | Pod lint and clean generated iOS simulator/device builds |
+| iOS runtime target | iOS 15 or newer | Plugin podspec and clean-consumer Pod integration |
+
+Flutter 3.44.0 and 3.44.1 are intentionally excluded: they bundle Dart 3.12.0
+and 3.12.1, while this package requires Dart 3.12.2. Flutter 3.44.2 is the
+first stable patch in the 3.44 line that satisfies the Dart constraint.
+
+The iOS 15 floor is deliberate. The pinned AsleepSDK 3.2.0 native source
+project declares `IPHONEOS_DEPLOYMENT_TARGET = 15.0`. The React Native wrapper's
+iOS 14 podspec does not prove that the same native binary is supported on iOS
+14, so the Flutter package keeps the native project's documented floor.
+
+CI uses Dart's package publisher to create the exact candidate `.tar.gz`,
+extracts that archive, then resolves the extracted package from clean generated
+Android and iOS apps. This uses a path only for the unpublished archive. The
+post-publication `Hosted consumer` workflow instead resolves an exact pub.dev
+version and builds both platforms without a path or Git dependency. Neither
+check initializes the SDK, starts tracking, or requires an API key.
 
 ## Verified Source Snapshots
 
@@ -57,8 +87,8 @@ versions and record them in the changelog and this matrix.
 | Item | Current conservative value | Evidence / decision |
 |---|---|---|
 | Minimum API | 24 | Verified by the pinned 3.2.1 plugin compile and example build |
-| Compile/target API | Flutter 3.44.8 generated values for the example | Final public build matrix remains required |
-| Language/build | Kotlin/Gradle plugin scaffold | Exact supported AGP, Gradle, Kotlin, and Java ranges require a clean consumer build matrix |
+| Compile/target API | 36 | Flutter 3.44.2 and 3.44.8 generated consumers use API 36 |
+| Language/build | AGP 9.0.1, Gradle 9.1.0, Kotlin 2.3.20, JDK 17 | Verified by clean generated consumer and example builds |
 | Foreground service | Required for tracking | Manifest must declare microphone foreground-service type |
 | Runtime microphone | Required | Check and request are separate API calls |
 | Notification permission | Android 13+ visibility concern | Denial must not be misreported as microphone denial |
@@ -75,7 +105,7 @@ availability is not proof of consumer artifact availability.
 
 | Item | Current conservative value | Evidence / decision |
 |---|---|---|
-| Minimum iOS | 15 | Follows the current iOS 3.2.0 native project and local plugin podspec |
+| Minimum iOS | 15 | Matches the AsleepSDK 3.2.0 native project and plugin podspec; the RN wrapper's iOS 14 declaration is not native-runtime proof |
 | Native SDK | 3.2.0 | Local `main` equals tag `3.2.0` |
 | Linking | CocoaPods static framework | Native `AsleepSDK` 3.2.0 has no verified consumer-accessible Swift Package Manager artifact |
 | Microphone usage text | Required in consuming app | `NSMicrophoneUsageDescription` |
@@ -156,7 +186,7 @@ The selected values are:
 - experimental `0.x` stability policy;
 - verified publisher `asleep.ai`;
 - Android 3.2.1 and iOS 3.2.0 native dependencies;
-- Android API 24, iOS 15, Dart `^3.12.2`, and Flutter `>=3.44.0` experimental
+- Android API 24, iOS 15, Dart `^3.12.2`, and Flutter `>=3.44.2` experimental
   floors.
 
 The following values remain unresolved and must not be guessed:
@@ -183,8 +213,9 @@ A public package must not be published until all of the following are resolved:
 
 1. Product approval for public source distribution and external use of both
    native SDK dependency paths.
-2. Recheck Android 3.2.1 and iOS 3.2.0 from clean release-CI
-   runners without developer-local credentials.
+2. Recheck Android 3.2.1 and iOS 3.2.0 from clean release-CI runners without
+   developer-local credentials; candidate and hosted consumer builds provide
+   this build-time proof but not runtime tracking proof.
 3. Confirm public support, issue, security, and source links.
 4. Inspect the final `.pubignore` archive and run the package, credential, and
    license gates from the exact release commit.

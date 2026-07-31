@@ -1,10 +1,10 @@
 # Verification Record
 
-Record updated: 2026-07-30
+Record updated: 2026-07-31
 
 Toolchain:
 
-- Flutter 3.44.8
+- Flutter 3.44.2 minimum and 3.44.8 current
 - Dart 3.12.2
 - Pigeon 27.3.0
 - Android Gradle Plugin 9.0.1
@@ -28,6 +28,10 @@ the release commit changes before manual publish.
 | Pub score | pana 0.23.15 against a disposable package copy | 140/160: 20/30 conventions, 20/20 documentation, 10/20 platform support, 50/50 static analysis, 40/40 dependencies |
 | Package validation | `dart pub publish --dry-run` in a clean `git archive HEAD` package copy | Pass with 0 warnings; compressed public archive is approximately 95 KB |
 | Archive inspection | Sensitive filename and credential-pattern scan of the clean `git archive HEAD` package copy | Pass |
+| Minimum Dart consumer | Flutter 3.44.2 / Dart 3.12.2 package resolution, analysis, and tests | Enforced by CI |
+| Candidate Android consumer | Clean `flutter create` app, exact publication-archive resolution, analysis, and debug/release APK builds | Enforced by CI without an API key or tracking call |
+| Candidate iOS consumer | Clean `flutter create` app, exact publication-archive resolution, analysis, and simulator/unsigned release builds | Enforced by CI without an API key or tracking call |
+| Hosted 0.1.0 consumers | Exact pub.dev resolution, analysis, Android APK build, and iOS simulator build | Available through the manually dispatchable `Hosted consumer` workflow and required after automated publication |
 | Workflow lint | `actionlint .github/workflows/*.yml` | Pass |
 | Android bridge | Gradle compile, unit tests, lint, manifest processing | Pass, including 20 bridge tests, release lint, and a merged manifest without forced battery-exemption permission |
 | Android native artifact | Maven Central POM and AAR download for `ai.asleep:asleepsdk:3.2.1` | Pass |

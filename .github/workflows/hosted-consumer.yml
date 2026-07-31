@@ -1,0 +1,158 @@
+name: Hosted consumer
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Exact published package version to verify
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact published package version to verify
+        required: true
+        default: "0.1.0"
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: 3.44.8
+  REQUESTED_VERSION: ${{ inputs.version }}
+
+jobs:
+  android:
+    name: Hosted Android consumer
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout consumer fixture
+        uses: actions/checkout@v6
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Record consumer toolchain
+        run: |
+          flutter --version
+          java -version
+
+      - name: Create clean consumer
+        run: |
+          package_version="${REQUESTED_VERSION#v}"
+          consumer="$(mktemp -d "$RUNNER_TEMP/asleep-hosted-android.XXXXXX")"
+          flutter create \
+            --empty \
+            --org ai.asleep \
+            --platforms android \
+            --project-name asleep_consumer \
+            "$consumer"
+          cp .github/fixtures/consumer_main.dart "$consumer/lib/main.dart"
+          echo "PACKAGE_VERSION=$package_version" >> "$GITHUB_ENV"
+          echo "CONSUMER=$consumer" >> "$GITHUB_ENV"
+
+      - name: Resolve exact hosted package
+        run: |
+          for attempt in {1..6}; do
+            if flutter pub add \
+              --no-example \
+              --directory "$CONSUMER" \
+              "asleep_sdk_flutter:$PACKAGE_VERSION"; then
+              exit 0
+            fi
+            if [[ "$attempt" == "6" ]]; then
+              echo "pub.dev did not expose $PACKAGE_VERSION after 6 attempts." >&2
+              exit 1
+            fi
+            echo "Waiting for pub.dev to expose $PACKAGE_VERSION (attempt $attempt/6)."
+            sleep 10
+          done
+
+      - name: Analyze hosted consumer
+        run: flutter analyze "$CONSUMER"
+
+      - name: Build hosted consumer APK
+        run: cd "$CONSUMER" && flutter build apk --debug
+
+  ios:
+    name: Hosted iOS consumer
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - name: Checkout consumer fixture
+        uses: actions/checkout@v6
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Record consumer toolchain
+        run: |
+          flutter --version
+          xcodebuild -version
+          pod --version
+
+      - name: Create clean consumer
+        run: |
+          package_version="${REQUESTED_VERSION#v}"
+          consumer="$(mktemp -d "$RUNNER_TEMP/asleep-hosted-ios.XXXXXX")"
+          flutter create \
+            --empty \
+            --org ai.asleep \
+            --platforms ios \
+            --project-name asleep_consumer \
+            "$consumer"
+          cp .github/fixtures/consumer_main.dart "$consumer/lib/main.dart"
+          echo "PACKAGE_VERSION=$package_version" >> "$GITHUB_ENV"
+          echo "CONSUMER=$consumer" >> "$GITHUB_ENV"
+
+      - name: Resolve exact hosted package
+        run: |
+          for attempt in {1..6}; do
+            if flutter pub add \
+              --no-example \
+              --directory "$CONSUMER" \
+              "asleep_sdk_flutter:$PACKAGE_VERSION"; then
+              exit 0
+            fi
+            if [[ "$attempt" == "6" ]]; then
+              echo "pub.dev did not expose $PACKAGE_VERSION after 6 attempts." >&2
+              exit 1
+            fi
+            echo "Waiting for pub.dev to expose $PACKAGE_VERSION (attempt $attempt/6)."
+            sleep 10
+          done
+
+      - name: Configure supported iOS target
+        run: |
+          sed -i.bak \
+            "s/# platform :ios, '13.0'/platform :ios, '15.0'/" \
+            "$CONSUMER/ios/Podfile"
+          sed -i.bak \
+            's/IPHONEOS_DEPLOYMENT_TARGET = 13.0;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/' \
+            "$CONSUMER/ios/Runner.xcodeproj/project.pbxproj"
+          perl -0pi.bak -e \
+            's/    flutter_additional_ios_build_settings\(target\)\n/    flutter_additional_ios_build_settings(target)\n    target.build_configurations.each do |config|\n      config.build_settings["IPHONEOS_DEPLOYMENT_TARGET"] = "15.0"\n    end\n/' \
+            "$CONSUMER/ios/Podfile"
+
+      - name: Analyze hosted consumer
+        run: flutter analyze "$CONSUMER"
+
+      - name: Build hosted consumer
+        run: cd "$CONSUMER" && flutter build ios --simulator --debug

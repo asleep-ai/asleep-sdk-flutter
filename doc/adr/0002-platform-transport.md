@@ -135,7 +135,7 @@ It does not cancel the native tracking session.
 ## Compatibility Floors
 
 The installed Flutter toolchain is 3.44.8 with Dart 3.12.2. Experimental 0.1.0
-declares Dart `^3.12.2`, Flutter `>=3.44.0`, Android API 24, and iOS 15. These
+declares Dart `^3.12.2`, Flutter `>=3.44.2`, Android API 24, and iOS 15. These
 are the first public experimental floors, not a permanent consumer support
 policy.
 The iOS value follows the current native Asleep SDK project target rather than
