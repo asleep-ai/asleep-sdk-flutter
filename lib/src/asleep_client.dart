@@ -57,6 +57,8 @@ class AsleepClient {
   bool _resumePending = false;
   bool _disposed = false;
   Future<void>? _disposeFuture;
+  bool _publishingState = false;
+  final List<AsleepSnapshot> _pendingStateNotifications = <AsleepSnapshot>[];
   int _eventErrorRevision = 0;
   AsleepError? _latestEventError;
 
@@ -460,8 +462,11 @@ class AsleepClient {
     if (_disposed) {
       return;
     }
-    if (_state.error != null) {
-      _setState(_state.copyWith(clearError: true));
+    final latestState = _pendingStateNotifications.isEmpty
+        ? _state
+        : _pendingStateNotifications.last;
+    if (latestState.error != null) {
+      _setState(latestState.copyWith(clearError: true));
     }
   }
 
@@ -691,11 +696,27 @@ class AsleepClient {
   }
 
   void _replaceState(AsleepSnapshot value) {
-    if (_sameSnapshot(_state, value)) {
+    final comparison = _pendingStateNotifications.isEmpty
+        ? _state
+        : _pendingStateNotifications.last;
+    if (_sameSnapshot(comparison, value)) {
       return;
     }
-    _state = value;
-    _states.add(value);
+    _pendingStateNotifications.add(value);
+    if (_publishingState) {
+      return;
+    }
+    _publishingState = true;
+    try {
+      while (_pendingStateNotifications.isNotEmpty) {
+        final next = _pendingStateNotifications.removeAt(0);
+        _state = next;
+        _states.add(next);
+      }
+    } finally {
+      _publishingState = false;
+      _pendingStateNotifications.clear();
+    }
   }
 
   bool _sameSnapshot(AsleepSnapshot left, AsleepSnapshot right) =>
@@ -846,6 +867,9 @@ class AsleepClient {
       _clearErrorIfUnchanged(errorBefore, eventErrorRevisionBefore);
       return result;
     } catch (error, stackTrace) {
+      if (error is _ProjectedStateCommandFailure) {
+        Error.throwWithStackTrace(error.exception, error.stackTrace);
+      }
       final structuredError = _errorAfterFailure(
         eventErrorRevisionBefore,
         error,
@@ -891,7 +915,7 @@ class AsleepClient {
           if (!_disposed) {
             _setState(value.copyWith(error: structuredError));
           }
-          Error.throwWithStackTrace(
+          throw _ProjectedStateCommandFailure(
             _exceptionForFailure(error, structuredError),
             stackTrace,
           );
@@ -1005,4 +1029,11 @@ class AsleepClient {
     }
     return _asleepError(commandError);
   }
+}
+
+final class _ProjectedStateCommandFailure implements Exception {
+  const _ProjectedStateCommandFailure(this.exception, this.stackTrace);
+
+  final AsleepException exception;
+  final StackTrace stackTrace;
 }

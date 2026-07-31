@@ -1184,6 +1184,130 @@ void main() {
       );
     }
 
+    test(
+      'initialize failure stays acknowledged by a synchronous listener',
+      () async {
+        platform.setupError = StateError('setup failed');
+        final acknowledgedErrors = <AsleepError>[];
+        final observedErrors = <AsleepError>[];
+        final observedCurrentErrors = <AsleepError?>[];
+        final observedClearStates = <AsleepSnapshot>[];
+        final firstSubscription = client.states.listen((state) {
+          if (state.setupStatus == SetupStatus.idle && state.error != null) {
+            acknowledgedErrors.add(state.error!);
+            client.clearError();
+          }
+        });
+        final secondSubscription = client.states.listen((state) {
+          if (state.setupStatus != SetupStatus.idle) {
+            return;
+          }
+          if (state.error case final error?) {
+            observedErrors.add(error);
+            observedCurrentErrors.add(client.state.error);
+            client.clearError();
+          } else {
+            observedClearStates.add(state);
+          }
+        });
+
+        final exception = await captureAsleepException(
+          client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key')),
+        );
+
+        expect(acknowledgedErrors, hasLength(1));
+        expect(acknowledgedErrors.single, same(exception.error));
+        expect(observedErrors, hasLength(1));
+        expect(observedErrors.single, same(exception.error));
+        expect(observedCurrentErrors, hasLength(1));
+        expect(observedCurrentErrors.single, same(exception.error));
+        expect(observedClearStates, hasLength(1));
+        expect(client.state.error, isNull);
+        await firstSubscription.cancel();
+        await secondSubscription.cancel();
+      },
+    );
+
+    test(
+      'configure failure stays acknowledged by a synchronous listener',
+      () async {
+        platform.configureError = StateError('configuration failed');
+        final acknowledgedErrors = <AsleepError>[];
+        final subscription = client.states.listen((state) {
+          if (state.setupStatus == SetupStatus.idle && state.error != null) {
+            acknowledgedErrors.add(state.error!);
+            client.clearError();
+          }
+        });
+
+        final exception = await captureAsleepException(
+          client.configure(const AsleepConfiguration(apiKey: 'test-api-key')),
+        );
+
+        expect(acknowledgedErrors, hasLength(1));
+        expect(acknowledgedErrors.single, same(exception.error));
+        expect(client.state.error, isNull);
+        await subscription.cancel();
+      },
+    );
+
+    test(
+      'analysis failure stays acknowledged by a synchronous listener',
+      () async {
+        await prepareClient(client);
+        platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
+        platform.analysisError = StateError('analysis failed');
+        final acknowledgedErrors = <AsleepError>[];
+        final subscription = client.states.listen((state) {
+          if (!state.isAnalyzing && state.error != null) {
+            acknowledgedErrors.add(state.error!);
+            client.clearError();
+          }
+        });
+
+        final exception = await captureAsleepException(
+          client.requestAnalysis(),
+        );
+
+        expect(acknowledgedErrors, hasLength(1));
+        expect(acknowledgedErrors.single, same(exception.error));
+        expect(client.state.error, isNull);
+        await subscription.cancel();
+      },
+    );
+
+    test('listener error clearing preserves a queued analysis retry', () async {
+      await prepareClient(client);
+      platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
+      platform.analysisError = StateError('analysis failed');
+      final retryCompleter = Completer<AnalysisRequest>();
+      Future<AnalysisRequest>? retry;
+      final retrySubscription = client.states.listen((state) {
+        if (!state.isAnalyzing && state.error != null && retry == null) {
+          platform.analysisError = null;
+          platform.analysisCompleter = retryCompleter;
+          retry = client.requestAnalysis();
+        }
+      });
+      final clearSubscription = client.states.listen((state) {
+        if (!state.isAnalyzing && state.error != null) {
+          client.clearError();
+        }
+      });
+
+      await captureAsleepException(client.requestAnalysis());
+
+      expect(retry, isNotNull);
+      expect(client.state.isAnalyzing, isTrue);
+      expect(client.state.error, isNull);
+      retryCompleter.complete(
+        const AnalysisRequest(status: AnalysisRequestStatus.requested),
+      );
+      await retry;
+      await retrySubscription.cancel();
+      await clearSubscription.cancel();
+    });
+
     test('native command details are shared with the snapshot error', () async {
       await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
       platform.loggingError = const AsleepException(
