@@ -67,6 +67,7 @@ class DiagnosticController extends ChangeNotifier {
   bool _trackingRestorationRequired = false;
   bool _trackingReconciliationInFlight = false;
   bool _trackingClosePending = false;
+  bool _stopAwaitingEndEvent = false;
   bool _recordingDeadCleanupRequired;
   bool _recoveryAwaitingUpload = false;
   bool _resumeInFlight = false;
@@ -91,14 +92,17 @@ class DiagnosticController extends ChangeNotifier {
   bool get deletionInFlight => _deletionInFlight;
   bool get recoveryAwaitingUpload => _recoveryAwaitingUpload;
   bool get trackingRestorationRequired => _trackingRestorationRequired;
+  bool get stopAwaitingEndEvent => _stopAwaitingEndEvent;
   bool get canReconcileTracking =>
       _trackingRestorationRequired &&
       !_trackingReconciliationInFlight &&
       !_trackingClosePending;
   bool get canStopTracking =>
-      _snapshot.isTracking || _startInFlight || _recordingDeadCleanupRequired;
+      !_stopAwaitingEndEvent &&
+      (_snapshot.isTracking || _startInFlight || _recordingDeadCleanupRequired);
   bool get canStartTracking =>
       !canStopTracking &&
+      !_stopAwaitingEndEvent &&
       !_trackingRestorationRequired &&
       !_trackingReconciliationInFlight;
 
@@ -207,6 +211,7 @@ class DiagnosticController extends ChangeNotifier {
       );
     } finally {
       _startInFlight = false;
+      _releaseStopAwaitingWithoutEndEventIfSettled();
       _notify();
     }
   }
@@ -214,16 +219,22 @@ class DiagnosticController extends ChangeNotifier {
   Future<void> resumeTracking() => _resumeForForeground();
 
   Future<void> stopTracking() async {
+    if (_stopAwaitingEndEvent || _closed) {
+      return;
+    }
     final mustReconcile = _startInFlight;
     _startOutcomeGeneration++;
+    _stopAwaitingEndEvent = true;
     if (mustReconcile) {
       _trackingRestorationRequired = true;
       _trackingReconciliationInFlight = true;
-      _notify();
     }
+    _notify();
+    var stopSucceeded = false;
     try {
       await _runWithOutcome(null, () async {
         await _client.stopTracking();
+        stopSucceeded = true;
         if (mustReconcile) {
           if (_client.state.trackingStatus == TrackingStatus.idle) {
             await _restoreTrackingState();
@@ -236,10 +247,13 @@ class DiagnosticController extends ChangeNotifier {
         }
       });
     } finally {
+      if (!stopSucceeded) {
+        _stopAwaitingEndEvent = false;
+      }
       if (mustReconcile) {
         _trackingReconciliationInFlight = false;
-        _notify();
       }
+      _notify();
     }
   }
 
@@ -273,6 +287,7 @@ class DiagnosticController extends ChangeNotifier {
     _operationMessage = restore.hasActiveSession
         ? 'Active tracking restored'
         : 'Tracking stopped';
+    _releaseStopAwaitingWithoutEndEventIfSettled();
   }
 
   Future<void> loadReport(String sessionId) async {
@@ -531,7 +546,7 @@ class DiagnosticController extends ChangeNotifier {
       if (_recoveryAwaitingUpload) {
         _recoveryAwaitingUpload = false;
       }
-      _reconcileAfterTrackingEnded();
+      _handleTrackingEnded();
     }
     if (event case AnalysisResultEvent(:final result)) {
       _analysisResult = result;
@@ -555,19 +570,29 @@ class DiagnosticController extends ChangeNotifier {
       }
       if (error.category == AsleepErrorCategory.terminal ||
           error.category == AsleepErrorCategory.recordingDead) {
-        _reconcileAfterTrackingEnded();
+        _handleTrackingEnded();
       }
     }
     _lastEvent = _safeEventLabel(event);
     _notify();
   }
 
-  void _reconcileAfterTrackingEnded() {
+  void _handleTrackingEnded() {
+    _stopAwaitingEndEvent = false;
     if (!_trackingRestorationRequired || !_trackingClosePending) {
       return;
     }
     _trackingClosePending = false;
     unawaited(reconcileTrackingState());
+  }
+
+  void _releaseStopAwaitingWithoutEndEventIfSettled() {
+    if (_stopAwaitingEndEvent &&
+        !_trackingRestorationRequired &&
+        !_trackingClosePending &&
+        !_startInFlight) {
+      _stopAwaitingEndEvent = false;
+    }
   }
 
   void _onEventError(Object streamError, StackTrace _) {

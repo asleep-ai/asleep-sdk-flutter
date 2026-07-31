@@ -340,6 +340,14 @@ void main() {
     await tester.tap(find.text('Stop tracking'));
     await tester.pump();
     expect(platform.stopCount, 1);
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Stop tracking'),
+          )
+          .onPressed,
+      isNull,
+    );
     platform.startCompleter!.completeError(StateError('start cancelled'));
     await tester.pump();
 

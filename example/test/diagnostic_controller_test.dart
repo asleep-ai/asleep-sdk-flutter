@@ -164,22 +164,138 @@ void main() {
       final stop = controller.stopTracking();
       await Future<void>.delayed(Duration.zero);
       expect(platform.calls, contains('stop'));
+      expect(controller.stopAwaitingEndEvent, isTrue);
+      expect(controller.canStopTracking, isFalse);
       platform.startCompleter!.completeError(StateError('start cancelled'));
       await start;
 
       expect(controller.canStartTracking, isFalse);
       expect(controller.canReconcileTracking, isFalse);
+      expect(controller.stopAwaitingEndEvent, isTrue);
       platform.restoreCompleter!.complete(
         const RestoreResult(hasActiveSession: false),
       );
       await stop;
 
+      expect(controller.stopAwaitingEndEvent, isFalse);
       expect(controller.canStartTracking, isTrue);
       expect(controller.canStopTracking, isFalse);
       expect(controller.trackingRestorationRequired, isFalse);
       expect(controller.permissionsGranted, isNull);
       expect(controller.operationMessage, 'Tracking stopped');
       expect(controller.operationError, isNull);
+
+      await controller.close();
+    });
+
+    test(
+      'normal Stop waits for a lifecycle end before allowing actions',
+      () async {
+        final platform = _FakePlatform();
+        final controller = _controller(platform);
+        await controller.initializeOrRestore('runtime-secret');
+        platform.emit(const TrackingCreatedEvent(sessionId: 'session-created'));
+
+        await controller.stopTracking();
+
+        expect(controller.stopAwaitingEndEvent, isTrue);
+        expect(controller.canStopTracking, isFalse);
+        expect(controller.canStartTracking, isFalse);
+        expect(controller.operationMessage, 'Tracking stopped');
+        expect(controller.operationError, isNull);
+        final stopCalls = platform.calls.where((call) => call == 'stop').length;
+
+        await controller.stopTracking();
+
+        expect(
+          platform.calls.where((call) => call == 'stop').length,
+          stopCalls,
+        );
+        expect(controller.operationMessage, 'Tracking stopped');
+        expect(controller.operationError, isNull);
+
+        platform.emit(const TrackingClosedEvent(sessionId: 'session-created'));
+
+        expect(controller.stopAwaitingEndEvent, isFalse);
+        expect(controller.canStopTracking, isFalse);
+        expect(controller.canStartTracking, isTrue);
+
+        await controller.close();
+      },
+    );
+
+    test(
+      'recording-dead cleanup Stop waits for a later lifecycle end',
+      () async {
+        final platform = _FakePlatform();
+        final controller = _controller(platform);
+        await controller.initializeOrRestore('runtime-secret');
+        final recordingDead = TrackingFailedEvent(
+          error: AsleepError(
+            code: 'AUDIO_INITIALIZATION_FAILED',
+            message: 'Recording stopped',
+            category: AsleepErrorCategory.recordingDead,
+          ),
+        );
+        platform.emit(recordingDead);
+
+        expect(controller.stopAwaitingEndEvent, isFalse);
+        expect(controller.canStopTracking, isTrue);
+        await controller.stopTracking();
+
+        expect(controller.stopAwaitingEndEvent, isTrue);
+        expect(controller.canStopTracking, isFalse);
+        expect(controller.canStartTracking, isFalse);
+        final stopCalls = platform.calls.where((call) => call == 'stop').length;
+        await controller.stopTracking();
+        expect(
+          platform.calls.where((call) => call == 'stop').length,
+          stopCalls,
+        );
+
+        platform.emit(recordingDead);
+
+        expect(controller.stopAwaitingEndEvent, isFalse);
+        expect(controller.canStopTracking, isTrue);
+        expect(controller.canStartTracking, isFalse);
+
+        await controller.stopTracking();
+        expect(controller.stopAwaitingEndEvent, isTrue);
+        platform.emit(const TrackingClosedEvent(sessionId: 'session-created'));
+        expect(controller.stopAwaitingEndEvent, isFalse);
+        expect(controller.canStopTracking, isFalse);
+        expect(controller.canStartTracking, isTrue);
+
+        await controller.close();
+      },
+    );
+
+    test('failed Stop immediately permits retry', () async {
+      final platform = _FakePlatform()..stopError = StateError('stop failed');
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+      platform.emit(const TrackingCreatedEvent(sessionId: 'session-created'));
+
+      await controller.stopTracking();
+
+      expect(controller.stopAwaitingEndEvent, isFalse);
+      expect(controller.canStopTracking, isTrue);
+      expect(controller.canStartTracking, isFalse);
+      expect(controller.operationMessage, 'Operation failed');
+      expect(controller.operationError, isNotNull);
+
+      platform.stopError = null;
+      await controller.stopTracking();
+
+      expect(platform.calls.where((call) => call == 'stop').length, 2);
+      expect(controller.stopAwaitingEndEvent, isTrue);
+      expect(controller.canStopTracking, isFalse);
+      expect(controller.operationMessage, 'Tracking stopped');
+      expect(controller.operationError, isNull);
+
+      platform.emit(const TrackingClosedEvent(sessionId: 'session-created'));
+      expect(controller.stopAwaitingEndEvent, isFalse);
+      expect(controller.canStartTracking, isTrue);
 
       await controller.close();
     });
@@ -523,10 +639,12 @@ void main() {
       expect(controller.canStartTracking, isFalse);
 
       await controller.stopTracking();
-      expect(controller.canStopTracking, isTrue);
+      expect(controller.stopAwaitingEndEvent, isTrue);
+      expect(controller.canStopTracking, isFalse);
       expect(controller.canStartTracking, isFalse);
 
       platform.emit(const TrackingClosedEvent(sessionId: 'session-1'));
+      expect(controller.stopAwaitingEndEvent, isFalse);
       expect(controller.canStopTracking, isFalse);
       expect(controller.canStartTracking, isTrue);
 
