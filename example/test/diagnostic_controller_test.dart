@@ -305,6 +305,149 @@ void main() {
       });
     }
 
+    for (final category in <AsleepErrorCategory>[
+      AsleepErrorCategory.terminal,
+      AsleepErrorCategory.recordingDead,
+    ]) {
+      test(
+        'tracked pending start reconciles after ${category.name} failure',
+        () async {
+          final platform = _FakePlatform()..startCompleter = Completer<void>();
+          final controller = _controller(platform);
+          await controller.initializeOrRestore('runtime-secret');
+          platform.restoreCompleter = Completer<RestoreResult>();
+          final restoreCallsBefore = platform.calls
+              .where((call) => call == 'restore')
+              .length;
+
+          final start = controller.startTracking();
+          await Future<void>.delayed(Duration.zero);
+          platform.emit(
+            const TrackingCreatedEvent(sessionId: 'session-created'),
+          );
+          await controller.stopTracking();
+
+          final failure = TrackingFailedEvent(
+            error: AsleepError(
+              code: 'TRACKING_ENDED',
+              message: 'Tracking ended',
+              category: category,
+            ),
+          );
+          platform.emit(failure);
+          await Future<void>.delayed(Duration.zero);
+
+          expect(
+            platform.calls.where((call) => call == 'restore').length,
+            restoreCallsBefore + 1,
+          );
+          expect(controller.trackingRestorationRequired, isTrue);
+          expect(controller.canStartTracking, isFalse);
+
+          platform.emit(
+            const TrackingClosedEvent(sessionId: 'session-created'),
+          );
+          platform.emit(failure);
+          await Future<void>.delayed(Duration.zero);
+          expect(
+            platform.calls.where((call) => call == 'restore').length,
+            restoreCallsBefore + 1,
+          );
+
+          platform.startCompleter!.complete();
+          await start;
+          expect(
+            platform.calls.where((call) => call == 'restore').length,
+            restoreCallsBefore + 1,
+          );
+
+          platform.restoreCompleter!.complete(
+            const RestoreResult(hasActiveSession: false),
+          );
+          await Future<void>.delayed(Duration.zero);
+
+          expect(controller.trackingRestorationRequired, isFalse);
+          if (category == AsleepErrorCategory.recordingDead) {
+            expect(controller.canStartTracking, isFalse);
+            expect(controller.canStopTracking, isTrue);
+          } else {
+            expect(controller.canStartTracking, isTrue);
+            expect(controller.canStopTracking, isFalse);
+          }
+
+          await controller.close();
+        },
+      );
+    }
+
+    for (final category in <AsleepErrorCategory>[
+      AsleepErrorCategory.transient,
+      AsleepErrorCategory.unknown,
+      AsleepErrorCategory.recoveryRequired,
+    ]) {
+      test(
+        '${category.name} failure does not release a pending tracked stop',
+        () async {
+          final platform = _FakePlatform()..startCompleter = Completer<void>();
+          final controller = _controller(platform);
+          await controller.initializeOrRestore('runtime-secret');
+          platform.restoreCompleter = Completer<RestoreResult>();
+          final restoreCallsBefore = platform.calls
+              .where((call) => call == 'restore')
+              .length;
+
+          final start = controller.startTracking();
+          await Future<void>.delayed(Duration.zero);
+          platform.emit(
+            const TrackingCreatedEvent(sessionId: 'session-created'),
+          );
+          await controller.stopTracking();
+          platform.emit(
+            TrackingFailedEvent(
+              error: AsleepError(
+                code: 'TRACKING_NOT_ENDED',
+                message: 'Tracking may still be active',
+                category: category,
+              ),
+            ),
+          );
+          await Future<void>.delayed(Duration.zero);
+
+          expect(
+            platform.calls.where((call) => call == 'restore').length,
+            restoreCallsBefore,
+          );
+          expect(controller.trackingRestorationRequired, isTrue);
+          expect(controller.canStartTracking, isFalse);
+          expect(controller.canReconcileTracking, isFalse);
+
+          platform.startCompleter!.complete();
+          await start;
+          expect(
+            platform.calls.where((call) => call == 'restore').length,
+            restoreCallsBefore,
+          );
+
+          platform.emit(
+            const TrackingClosedEvent(sessionId: 'session-created'),
+          );
+          await Future<void>.delayed(Duration.zero);
+          expect(
+            platform.calls.where((call) => call == 'restore').length,
+            restoreCallsBefore + 1,
+          );
+          platform.restoreCompleter!.complete(
+            const RestoreResult(hasActiveSession: false),
+          );
+          await Future<void>.delayed(Duration.zero);
+          expect(controller.trackingRestorationRequired, isFalse);
+          expect(controller.canStartTracking, isTrue);
+
+          await controller.close();
+        },
+      );
+    }
+
     test('failed tracked Stop permits manual reconciliation', () async {
       final platform = _FakePlatform()
         ..startCompleter = Completer<void>()

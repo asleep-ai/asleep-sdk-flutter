@@ -531,10 +531,7 @@ class DiagnosticController extends ChangeNotifier {
       if (_recoveryAwaitingUpload) {
         _recoveryAwaitingUpload = false;
       }
-      if (_trackingRestorationRequired) {
-        _trackingClosePending = false;
-        unawaited(reconcileTrackingState());
-      }
+      _reconcileAfterTrackingEnded();
     }
     if (event case AnalysisResultEvent(:final result)) {
       _analysisResult = result;
@@ -556,9 +553,21 @@ class DiagnosticController extends ChangeNotifier {
       } else if (error.category == AsleepErrorCategory.terminal) {
         _recordingDeadCleanupRequired = false;
       }
+      if (error.category == AsleepErrorCategory.terminal ||
+          error.category == AsleepErrorCategory.recordingDead) {
+        _reconcileAfterTrackingEnded();
+      }
     }
     _lastEvent = _safeEventLabel(event);
     _notify();
+  }
+
+  void _reconcileAfterTrackingEnded() {
+    if (!_trackingRestorationRequired || !_trackingClosePending) {
+      return;
+    }
+    _trackingClosePending = false;
+    unawaited(reconcileTrackingState());
   }
 
   void _onEventError(Object streamError, StackTrace _) {
