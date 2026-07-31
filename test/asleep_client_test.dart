@@ -629,7 +629,7 @@ void main() {
     });
 
     test(
-      'recovers state and permits retry after initialization timeout',
+      'recovers state while iOS quarantines timed-out initialization',
       () async {
         platform.setupCompleter = Completer<void>();
         final initialization = client.initialize(
@@ -672,17 +672,36 @@ void main() {
         expect(client.state.error?.platformDetails['phase'], 'setup');
 
         platform.setupCompleter = null;
+        platform.setupError = const AsleepException(
+          AsleepErrorCode.nativeFailure,
+          'Wait for the timed-out iOS initialization attempt to finish before retrying',
+          nativeCode: 'INITIALIZATION_RECOVERY_REQUIRED',
+        );
+        await expectLater(
+          client.initialize(
+            const AsleepSetupOptions(apiKey: 'quarantined-retry-api-key'),
+          ),
+          throwsA(
+            isA<AsleepException>().having(
+              (error) => error.nativeCode,
+              'nativeCode',
+              'INITIALIZATION_RECOVERY_REQUIRED',
+            ),
+          ),
+        );
+
+        platform.setupError = null;
         await client.initialize(
           const AsleepSetupOptions(apiKey: 'retry-api-key'),
         );
 
-        expect(platform.setupCount, 2);
+        expect(platform.setupCount, 3);
         expect(client.state.setupStatus, SetupStatus.complete);
         expect(client.state.error, isNull);
       },
     );
 
-    test('permits configure retry after native join timeout', () async {
+    test('permits configure retry after native join quarantine settles', () async {
       await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
       platform.configureCompleter = Completer<void>();
       final configuration = client.configure(
@@ -708,11 +727,30 @@ void main() {
       expect(client.state.error?.code, 'INITIALIZATION_TIMEOUT');
 
       platform.configureCompleter = null;
+      platform.configureError = const AsleepException(
+        AsleepErrorCode.nativeFailure,
+        'Wait for the timed-out iOS initialization attempt to finish before retrying',
+        nativeCode: 'INITIALIZATION_RECOVERY_REQUIRED',
+      );
+      await expectLater(
+        client.configure(
+          const AsleepConfiguration(apiKey: 'quarantined-retry-api-key'),
+        ),
+        throwsA(
+          isA<AsleepException>().having(
+            (error) => error.nativeCode,
+            'nativeCode',
+            'INITIALIZATION_RECOVERY_REQUIRED',
+          ),
+        ),
+      );
+
+      platform.configureError = null;
       await client.configure(
         const AsleepConfiguration(apiKey: 'retry-api-key'),
       );
 
-      expect(platform.configureCount, 2);
+      expect(platform.configureCount, 3);
       expect(client.state.setupStatus, SetupStatus.complete);
       expect(client.state.error, isNull);
     });

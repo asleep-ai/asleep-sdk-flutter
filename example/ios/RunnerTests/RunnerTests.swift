@@ -152,6 +152,58 @@ class RunnerTests: XCTestCase {
     XCTAssertEqual(try? results[0].getFailure() as? TestError, .detached)
   }
 
+  func testHostSerializesConcurrentTimeoutAndFailureExactlyOnce() throws {
+    let scheduler = TestInitializationScheduler()
+    let events = TestEventEmitter()
+    var setupDelegate: AsleepSetupDelegate?
+    let host = IosAsleepHostApi(
+      events: events,
+      nativeSdk: IosNativeSdkActions(
+        setLogger: { _ in },
+        setup: { _, _, _, _, _, delegate in setupDelegate = delegate },
+        configure: { _, _, _, _, _, _ in }
+      ),
+      initializationScheduler: scheduler,
+      initializationTimeout: 30
+    )
+    var results: [Result<Void, Error>] = []
+    host.setup(
+      message: SetupMessage(
+        apiKey: "test-key",
+        baseUrl: nil,
+        callbackUrl: nil,
+        service: nil,
+        enableOnDeviceAnalysis: false
+      )
+    ) {
+      results.append($0)
+    }
+    let delegate = try XCTUnwrap(setupDelegate)
+    let timeoutTask = try XCTUnwrap(scheduler.tasks.first)
+    let failureSubmitted = expectation(description: "failure submitted")
+
+    DispatchQueue.global().async {
+      delegate.setupDidFail(error: .networkOffline)
+      failureSubmitted.fulfill()
+    }
+    DispatchQueue.main.async {
+      scheduler.run(timeoutTask)
+    }
+    wait(for: [failureSubmitted], timeout: 1)
+    let mainQueueDrained = expectation(description: "main queue drained")
+    DispatchQueue.main.async {
+      mainQueueDrained.fulfill()
+    }
+    wait(for: [mainQueueDrained], timeout: 1)
+
+    XCTAssertEqual(results.count, 1)
+    XCTAssertEqual(events.types.count, 1)
+    delegate.setupDidFail(error: .networkOffline)
+    XCTAssertEqual(results.count, 1)
+    XCTAssertEqual(events.types.count, 1)
+    host.detach()
+  }
+
   func testHostQuarantinesTimedOutSetupDelegateFromRetry() {
     let scheduler = TestInitializationScheduler()
     let events = TestEventEmitter()
@@ -199,27 +251,44 @@ class RunnerTests: XCTestCase {
     ) {
       secondResults.append($0)
     }
-    XCTAssertEqual(setupDelegates.count, 2)
+    XCTAssertEqual(setupDelegates.count, 1)
+    XCTAssertEqual(secondResults.count, 1)
+    XCTAssertEqual(
+      (try? secondResults[0].getFailure() as? PigeonError)?.code,
+      "INITIALIZATION_RECOVERY_REQUIRED"
+    )
 
     setupDelegates[0].setupDidComplete()
     XCTAssertTrue(configureDelegates.isEmpty)
-    XCTAssertTrue(secondResults.isEmpty)
 
+    var thirdResults: [Result<Void, Error>] = []
+    host.setup(
+      message: SetupMessage(
+        apiKey: "settled-retry-key",
+        baseUrl: nil,
+        callbackUrl: nil,
+        service: nil,
+        enableOnDeviceAnalysis: false
+      )
+    ) {
+      thirdResults.append($0)
+    }
+    XCTAssertEqual(setupDelegates.count, 2)
     setupDelegates[1].setupDidComplete()
     XCTAssertEqual(configureDelegates.count, 1)
     configureDelegates[0].didFailUserJoin(error: .networkOffline)
     configureDelegates[0].didFailUserJoin(error: .networkOffline)
 
-    XCTAssertEqual(secondResults.count, 1)
+    XCTAssertEqual(thirdResults.count, 1)
     XCTAssertEqual(events.types.suffix(2), ["onUserJoinFailed", "onSetupDidFail"])
     host.detach()
   }
 
-  func testHostDetachRejectsPendingSetupAndReleasesNativeOwnership() {
+  func testDetachedDeallocatedHostReleasesOwnershipAfterLateTerminalCallback() {
     let scheduler = TestInitializationScheduler()
     let events = TestEventEmitter()
     var firstDelegate: AsleepSetupDelegate?
-    let firstHost = IosAsleepHostApi(
+    var firstHost: IosAsleepHostApi? = IosAsleepHostApi(
       events: events,
       nativeSdk: IosNativeSdkActions(
         setLogger: { _ in },
@@ -230,7 +299,7 @@ class RunnerTests: XCTestCase {
       initializationTimeout: 30
     )
     var firstResults: [Result<Void, Error>] = []
-    firstHost.setup(
+    firstHost?.setup(
       message: SetupMessage(
         apiKey: "test-key",
         baseUrl: nil,
@@ -242,14 +311,17 @@ class RunnerTests: XCTestCase {
       firstResults.append($0)
     }
 
-    firstHost.detach()
-    firstDelegate?.setupDidComplete()
+    weak let weakFirstHost = firstHost
+    firstHost?.detach()
+    firstHost = nil
     scheduler.runAll()
 
+    XCTAssertNil(weakFirstHost)
     XCTAssertEqual(firstResults.count, 1)
     XCTAssertTrue(events.types.isEmpty)
 
     var secondSetupCount = 0
+    var secondResults: [Result<Void, Error>] = []
     let secondHost = IosAsleepHostApi(
       events: TestEventEmitter(),
       nativeSdk: IosNativeSdkActions(
@@ -268,10 +340,103 @@ class RunnerTests: XCTestCase {
         service: nil,
         enableOnDeviceAnalysis: false
       )
+    ) {
+      secondResults.append($0)
+    }
+
+    XCTAssertEqual(secondSetupCount, 0)
+    XCTAssertEqual(secondResults.count, 1)
+    XCTAssertNotNil(try? secondResults[0].getFailure())
+
+    firstDelegate?.setupDidComplete()
+    var secondDelegate: AsleepSetupDelegate?
+    secondHost.detach()
+    let replacementHost = IosAsleepHostApi(
+      events: TestEventEmitter(),
+      nativeSdk: IosNativeSdkActions(
+        setLogger: { _ in },
+        setup: { _, _, _, _, _, delegate in
+          secondSetupCount += 1
+          secondDelegate = delegate
+        },
+        configure: { _, _, _, _, _, _ in }
+      ),
+      initializationScheduler: TestInitializationScheduler(),
+      initializationTimeout: 30
+    )
+    replacementHost.setup(
+      message: SetupMessage(
+        apiKey: "replacement-key",
+        baseUrl: nil,
+        callbackUrl: nil,
+        service: nil,
+        enableOnDeviceAnalysis: false
+      )
     ) { _ in }
 
     XCTAssertEqual(secondSetupCount, 1)
-    secondHost.detach()
+    secondDelegate?.setupDidFail(error: .networkOffline)
+    replacementHost.detach()
+  }
+
+  func testDuplicateSetupCallbackCannotSettleConfigurationDrain() {
+    let scheduler = TestInitializationScheduler()
+    var setupDelegate: AsleepSetupDelegate?
+    var configureDelegates: [AsleepConfigDelegate] = []
+    let host = IosAsleepHostApi(
+      events: TestEventEmitter(),
+      nativeSdk: IosNativeSdkActions(
+        setLogger: { _ in },
+        setup: { _, _, _, _, _, delegate in setupDelegate = delegate },
+        configure: { _, _, _, _, _, delegate in
+          configureDelegates.append(delegate)
+        }
+      ),
+      initializationScheduler: scheduler,
+      initializationTimeout: 30
+    )
+    host.setup(
+      message: SetupMessage(
+        apiKey: "test-key",
+        baseUrl: nil,
+        callbackUrl: nil,
+        service: nil,
+        enableOnDeviceAnalysis: false
+      )
+    ) { _ in }
+    setupDelegate?.setupDidComplete()
+    scheduler.runNext()
+
+    setupDelegate?.setupDidComplete()
+    var quarantinedResults: [Result<Void, Error>] = []
+    host.configure(
+      message: ConfigurationMessage(
+        apiKey: "quarantined-retry-key",
+        userId: nil,
+        baseUrl: nil,
+        callbackUrl: nil
+      )
+    ) {
+      quarantinedResults.append($0)
+    }
+    XCTAssertEqual(
+      (try? quarantinedResults[0].getFailure() as? PigeonError)?.code,
+      "INITIALIZATION_RECOVERY_REQUIRED"
+    )
+    XCTAssertEqual(configureDelegates.count, 1)
+
+    configureDelegates[0].didFailUserJoin(error: .networkOffline)
+    host.configure(
+      message: ConfigurationMessage(
+        apiKey: "settled-retry-key",
+        userId: nil,
+        baseUrl: nil,
+        callbackUrl: nil
+      )
+    ) { _ in }
+    XCTAssertEqual(configureDelegates.count, 2)
+    configureDelegates[1].didFailUserJoin(error: .networkOffline)
+    host.detach()
   }
 
   func testHostQuarantinesTimedOutJoinDelegateFromNewConfiguration() {
@@ -323,14 +488,30 @@ class RunnerTests: XCTestCase {
     ) {
       retryResults.append($0)
     }
-    XCTAssertEqual(configureDelegates.count, 2)
+    XCTAssertEqual(configureDelegates.count, 1)
+    XCTAssertEqual(retryResults.count, 1)
+    XCTAssertEqual(
+      (try? retryResults[0].getFailure() as? PigeonError)?.code,
+      "INITIALIZATION_RECOVERY_REQUIRED"
+    )
 
     configureDelegates[0].didFailUserJoin(error: .networkOffline)
-    XCTAssertTrue(retryResults.isEmpty)
     XCTAssertEqual(events.types.count, 2)
 
+    var settledRetryResults: [Result<Void, Error>] = []
+    host.configure(
+      message: ConfigurationMessage(
+        apiKey: "settled-retry-key",
+        userId: nil,
+        baseUrl: nil,
+        callbackUrl: nil
+      )
+    ) {
+      settledRetryResults.append($0)
+    }
+    XCTAssertEqual(configureDelegates.count, 2)
     configureDelegates[1].didFailUserJoin(error: .networkOffline)
-    XCTAssertEqual(retryResults.count, 1)
+    XCTAssertEqual(settledRetryResults.count, 1)
     XCTAssertEqual(events.types.last, "onUserJoinFailed")
     host.detach()
   }

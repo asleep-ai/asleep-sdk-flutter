@@ -95,6 +95,14 @@ final class InitializationAttemptCoordinator {
     activeAttempt != nil
   }
 
+  var activeAttemptID: UInt64? {
+    activeAttempt?.identifier
+  }
+
+  var activePhase: InitializationPhase? {
+    activeAttempt?.phase
+  }
+
   func begin(
     phase: InitializationPhase,
     completion: @escaping Completion

@@ -117,9 +117,15 @@ that engine detaches; another engine receives an immediate native failure.
 On iOS, each native setup phase and user-join/configuration phase has a
 30-second completion bound. A timeout rejects the command with native code
 `INITIALIZATION_TIMEOUT`; its details identify the timed-out phase as `setup`
-or `configuration`. The client returns to an uninitialized state and the same
-engine may retry. Attempt-specific native delegates quarantine callbacks from
-the timed-out attempt, so they cannot complete or mutate a newer retry.
+or `configuration`. The client returns to an uninitialized state, but the
+process-global native initialization lane remains quarantined until that
+attempt delivers a terminal callback. A retry during that interval fails with
+native code `INITIALIZATION_RECOVERY_REQUIRED`; retry after the terminal
+callback is accepted. Attempt-specific native delegates prevent callbacks from
+the timed-out attempt from completing or mutating a newer retry. If the native
+SDK never delivers a terminal callback, restart the app process before
+initializing again; detaching and creating another Flutter engine cannot safely
+release an in-flight process-global native operation.
 
 ## Permissions and platform configuration
 
