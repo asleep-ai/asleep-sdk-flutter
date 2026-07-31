@@ -129,6 +129,8 @@ class DiagnosticController extends ChangeNotifier {
   bool get canStartTracking =>
       !canStopTracking &&
       _sdkPrepared &&
+      (hostPlatform != DiagnosticHostPlatform.android ||
+          _batteryStatus?.exempted == true) &&
       !_sdkPreparationInFlight &&
       !_stopAwaitingEndEvent &&
       !_trackingRestorationRequired &&
@@ -302,6 +304,8 @@ class DiagnosticController extends ChangeNotifier {
             _trackingClosePending = true;
             _operationMessage = 'Tracking stop requested; waiting for close';
           }
+        } else if (_stopAwaitingEndEvent) {
+          _operationMessage = 'Tracking stop requested; waiting for close';
         } else {
           _operationMessage = 'Tracking stopped';
         }
@@ -666,8 +670,12 @@ class DiagnosticController extends ChangeNotifier {
   }
 
   void _handleTrackingEnded() {
+    final completedPendingStop = _stopAwaitingEndEvent;
     _stopAwaitingEndEvent = false;
     if (!_trackingRestorationRequired || !_trackingClosePending) {
+      if (completedPendingStop) {
+        _operationMessage = 'Tracking stopped';
+      }
       return;
     }
     _trackingClosePending = false;

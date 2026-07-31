@@ -117,6 +117,9 @@ void main() {
       );
 
       expect(controller.sdkPrepared, isTrue);
+      expect(controller.canStartTracking, isFalse);
+
+      await controller.recheckBatteryOptimization();
       expect(controller.canStartTracking, isTrue);
 
       await controller.close();
@@ -169,6 +172,9 @@ void main() {
 
       platform.emit(const TrackingClosedEvent(sessionId: 'restored-session'));
       expect(controller.sdkPrepared, isTrue);
+      expect(controller.canStartTracking, isFalse);
+
+      await controller.recheckBatteryOptimization();
       expect(controller.canStartTracking, isTrue);
 
       await controller.close();
@@ -266,6 +272,59 @@ void main() {
       await controller.close();
     });
 
+    test(
+      'Android Start requires an exemption and recheck updates eligibility',
+      () async {
+        final platform = _FakePlatform()
+          ..batteryStatus = const BatteryOptimizationStatus(
+            exempted: false,
+            platform: 'android',
+          );
+        final controller = _controller(platform);
+
+        await controller.initializeOrRestore('runtime-secret');
+
+        expect(controller.sdkPrepared, isTrue);
+        expect(controller.batteryStatus?.exempted, isFalse);
+        expect(controller.canStartTracking, isFalse);
+        await controller.startTracking();
+        expect(platform.calls.where((call) => call == 'start'), isEmpty);
+
+        platform.batteryStatus = const BatteryOptimizationStatus(
+          exempted: true,
+          platform: 'android',
+        );
+        await controller.recheckBatteryOptimization();
+
+        expect(controller.batteryStatus?.exempted, isTrue);
+        expect(controller.canStartTracking, isTrue);
+        await controller.startTracking();
+        expect(platform.calls.where((call) => call == 'start').length, 1);
+
+        await controller.close();
+      },
+    );
+
+    test('iOS Start does not require an Android battery exemption', () async {
+      final platform = _FakePlatform()
+        ..batteryStatus = const BatteryOptimizationStatus(
+          exempted: false,
+          platform: 'ios',
+        );
+      final controller = _controller(
+        platform,
+        hostPlatform: DiagnosticHostPlatform.ios,
+      );
+
+      await controller.initializeOrRestore('runtime-secret');
+
+      expect(controller.sdkPrepared, isTrue);
+      expect(controller.batteryStatus?.exempted, isFalse);
+      expect(controller.canStartTracking, isTrue);
+
+      await controller.close();
+    });
+
     test('updates Android permission state from tracking preflight', () async {
       final platform = _FakePlatform()..permissionsGranted = false;
       final controller = _controller(platform);
@@ -284,17 +343,24 @@ void main() {
         exempted: false,
         platform: 'android',
       );
+      await controller.recheckBatteryOptimization();
+      expect(controller.canStartTracking, isFalse);
+      final startsBeforeBatteryExemption = platform.calls
+          .where((call) => call == 'start')
+          .length;
       await controller.startTracking();
       expect(controller.permissionsGranted, isTrue);
       expect(
-        controller.operationError?.code,
-        AsleepErrorCode.invalidState.name,
+        platform.calls.where((call) => call == 'start').length,
+        startsBeforeBatteryExemption,
       );
 
       platform.batteryStatus = const BatteryOptimizationStatus(
         exempted: true,
         platform: 'android',
       );
+      await controller.recheckBatteryOptimization();
+      expect(controller.canStartTracking, isTrue);
       await controller.startTracking();
       expect(controller.permissionsGranted, isTrue);
 
@@ -410,7 +476,10 @@ void main() {
         expect(controller.stopAwaitingEndEvent, isTrue);
         expect(controller.canStopTracking, isFalse);
         expect(controller.canStartTracking, isFalse);
-        expect(controller.operationMessage, 'Tracking stopped');
+        expect(
+          controller.operationMessage,
+          'Tracking stop requested; waiting for close',
+        );
         expect(controller.operationError, isNull);
         final stopCalls = platform.calls.where((call) => call == 'stop').length;
 
@@ -420,7 +489,10 @@ void main() {
           platform.calls.where((call) => call == 'stop').length,
           stopCalls,
         );
-        expect(controller.operationMessage, 'Tracking stopped');
+        expect(
+          controller.operationMessage,
+          'Tracking stop requested; waiting for close',
+        );
         expect(controller.operationError, isNull);
 
         platform.emit(const TrackingClosedEvent(sessionId: 'session-created'));
@@ -428,10 +500,52 @@ void main() {
         expect(controller.stopAwaitingEndEvent, isFalse);
         expect(controller.canStopTracking, isFalse);
         expect(controller.canStartTracking, isTrue);
+        expect(controller.operationMessage, 'Tracking stopped');
 
         await controller.close();
       },
     );
+
+    for (final category in <AsleepErrorCategory>[
+      AsleepErrorCategory.terminal,
+      AsleepErrorCategory.recordingDead,
+    ]) {
+      test(
+        '${category.name} lifecycle failure completes a pending Stop',
+        () async {
+          final platform = _FakePlatform();
+          final controller = _controller(platform);
+          await controller.initializeOrRestore('runtime-secret');
+          platform.emit(
+            const TrackingCreatedEvent(sessionId: 'session-created'),
+          );
+
+          await controller.stopTracking();
+
+          expect(controller.stopAwaitingEndEvent, isTrue);
+          expect(
+            controller.operationMessage,
+            'Tracking stop requested; waiting for close',
+          );
+
+          platform.emit(
+            TrackingFailedEvent(
+              error: AsleepError(
+                code: 'TRACKING_ENDED',
+                message: 'Tracking ended',
+                category: category,
+              ),
+            ),
+          );
+
+          expect(controller.stopAwaitingEndEvent, isFalse);
+          expect(controller.operationMessage, 'Tracking stopped');
+          expect(controller.operationError, isNull);
+
+          await controller.close();
+        },
+      );
+    }
 
     test(
       'pending Stop blocks analysis without replacing its outcome',
@@ -446,16 +560,23 @@ void main() {
         expect(controller.stopAwaitingEndEvent, isTrue);
         expect(controller.snapshot.trackingStatus, TrackingStatus.tracking);
         expect(controller.canRequestAnalysis, isFalse);
-        expect(controller.operationMessage, 'Tracking stopped');
+        expect(
+          controller.operationMessage,
+          'Tracking stop requested; waiting for close',
+        );
         await controller.requestAnalysis();
 
         expect(platform.calls.where((call) => call == 'analysis').length, 0);
-        expect(controller.operationMessage, 'Tracking stopped');
+        expect(
+          controller.operationMessage,
+          'Tracking stop requested; waiting for close',
+        );
         expect(controller.operationError, isNull);
 
         platform.emit(const TrackingClosedEvent(sessionId: 'session-created'));
         expect(controller.stopAwaitingEndEvent, isFalse);
         expect(controller.canRequestAnalysis, isFalse);
+        expect(controller.operationMessage, 'Tracking stopped');
 
         await controller.close();
       },
@@ -491,11 +612,17 @@ void main() {
 
           expect(controller.stopAwaitingEndEvent, isTrue);
           expect(controller.canResumeTracking, isFalse);
-          expect(controller.operationMessage, 'Tracking stopped');
+          expect(
+            controller.operationMessage,
+            'Tracking stop requested; waiting for close',
+          );
           await controller.resumeTracking();
 
           expect(platform.resumeCount, 0);
-          expect(controller.operationMessage, 'Tracking stopped');
+          expect(
+            controller.operationMessage,
+            'Tracking stop requested; waiting for close',
+          );
           expect(controller.operationError, isNull);
 
           platform.emit(
@@ -503,6 +630,7 @@ void main() {
           );
           expect(controller.stopAwaitingEndEvent, isFalse);
           expect(controller.canResumeTracking, isFalse);
+          expect(controller.operationMessage, 'Tracking stopped');
 
           await controller.close();
         },
@@ -575,12 +703,16 @@ void main() {
       expect(platform.calls.where((call) => call == 'stop').length, 2);
       expect(controller.stopAwaitingEndEvent, isTrue);
       expect(controller.canStopTracking, isFalse);
-      expect(controller.operationMessage, 'Tracking stopped');
+      expect(
+        controller.operationMessage,
+        'Tracking stop requested; waiting for close',
+      );
       expect(controller.operationError, isNull);
 
       platform.emit(const TrackingClosedEvent(sessionId: 'session-created'));
       expect(controller.stopAwaitingEndEvent, isFalse);
       expect(controller.canStartTracking, isTrue);
+      expect(controller.operationMessage, 'Tracking stopped');
 
       await controller.close();
     });

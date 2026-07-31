@@ -102,6 +102,50 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('Android battery recheck enables Start after exemption', (
+    tester,
+  ) async {
+    _useTallSurface(tester);
+    final platform = _WidgetFakePlatform()
+      ..batteryStatus = const BatteryOptimizationStatus(
+        exempted: false,
+        platform: 'android',
+      );
+    final controller = DiagnosticController(
+      client: AsleepClient(platform: platform),
+      hostPlatform: DiagnosticHostPlatform.android,
+    );
+    await controller.initializeOrRestore('runtime-secret');
+    await tester.pumpWidget(AsleepExampleApp(controller: controller));
+
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Start tracking'),
+          )
+          .onPressed,
+      isNull,
+    );
+
+    platform.batteryStatus = const BatteryOptimizationStatus(
+      exempted: true,
+      platform: 'android',
+    );
+    await controller.recheckBatteryOptimization();
+    await tester.pump();
+
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Start tracking'),
+          )
+          .onPressed,
+      isNotNull,
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('renders the complete diagnostic journey', (tester) async {
     _useTallSurface(tester);
     final platform = _WidgetFakePlatform();
@@ -543,6 +587,10 @@ class _WidgetFakePlatform implements AsleepPlatform {
   Completer<void>? startCompleter;
   Completer<RestoreResult>? restoreCompleter;
   Completer<BatteryOptimizationStatus>? batteryCheckCompleter;
+  BatteryOptimizationStatus batteryStatus = const BatteryOptimizationStatus(
+    exempted: true,
+    platform: 'android',
+  );
   bool permissionsGranted = true;
   bool permissionRequestResult = true;
 
@@ -564,8 +612,7 @@ class _WidgetFakePlatform implements AsleepPlatform {
 
   @override
   Future<BatteryOptimizationStatus> checkBatteryOptimization() async =>
-      await batteryCheckCompleter?.future ??
-      const BatteryOptimizationStatus(exempted: true, platform: 'android');
+      await batteryCheckCompleter?.future ?? batteryStatus;
 
   @override
   Future<bool> requestBatteryOptimizationExemption() async => true;
