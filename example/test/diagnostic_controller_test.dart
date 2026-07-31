@@ -98,12 +98,55 @@ void main() {
       expect(controller.canStopTracking, isTrue);
       expect(controller.canStartTracking, isFalse);
 
+      expect(await controller.checkPermissions(), isTrue);
+      expect(controller.snapshot.error, isNull);
+      expect(controller.canStopTracking, isTrue);
+      expect(controller.canStartTracking, isFalse);
+
+      await controller.stopTracking();
+      expect(controller.canStopTracking, isTrue);
+      expect(controller.canStartTracking, isFalse);
+
       platform.emit(const TrackingClosedEvent(sessionId: 'session-1'));
       expect(controller.canStopTracking, isFalse);
       expect(controller.canStartTracking, isTrue);
 
       await controller.close();
     });
+
+    test(
+      'redacts native event stream failures without uncaught errors',
+      () async {
+        final platform = _FakePlatform();
+        final controller = _controller(platform);
+        await controller.initializeOrRestore('runtime-secret');
+
+        platform.emitError(
+          AsleepException(
+            AsleepErrorCode.malformedPayload,
+            'secret-native-event-payload',
+            nativeCode: 'EVENT_DECODE_FAILED',
+            nativeDetails: const <String, Object?>{
+              'credential': 'runtime-secret',
+            },
+          ),
+        );
+
+        expect(controller.operationErrorText, 'EVENT_DECODE_FAILED (unknown)');
+        expect(controller.operationMessage, 'Native event stream failed');
+        expect(controller.lastEvent, 'Native event stream failed');
+        expect(
+          controller.operationErrorText,
+          isNot(contains('runtime-secret')),
+        );
+        expect(
+          controller.operationErrorText,
+          isNot(contains('secret-native-event-payload')),
+        );
+
+        await controller.close();
+      },
+    );
 
     test('exercises tracking, analysis, and every report form', () async {
       final platform = _FakePlatform();
@@ -399,11 +442,13 @@ void main() {
       await controller.initializeOrRestore('runtime-secret');
       await controller.loadReport('session-1');
       await controller.loadReportList('2026-07-01', '2026-07-31');
+      await controller.loadAverageReport('2026-07-01', '2026-07-31');
 
       expect(controller.report?.session.id, 'session-1');
       expect(controller.reportList.map((session) => session.id), <String>[
         'session-1',
       ]);
+      expect(controller.averageReport, isNotNull);
 
       expect(
         await controller.deleteSession('session-1', confirmed: true),
@@ -411,9 +456,63 @@ void main() {
       );
       expect(controller.report, isNull);
       expect(controller.reportList, isEmpty);
+      expect(controller.averageReport, isNull);
 
       await controller.close();
     });
+
+    test('pending report loads cannot restore a deleted session', () async {
+      final platform = _FakePlatform()
+        ..reportCompleter = Completer<AsleepReport>()
+        ..reportListCompleter = Completer<List<AsleepSession>>();
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+
+      final reportLoad = controller.loadReport('session-1');
+      final listLoad = controller.loadReportList('2026-07-01', '2026-07-31');
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        await controller.deleteSession('session-1', confirmed: true),
+        isTrue,
+      );
+
+      platform.reportCompleter!.complete(_reportFor('session-1'));
+      platform.reportListCompleter!.complete(<AsleepSession>[
+        _sessionFor('session-1'),
+      ]);
+      await Future.wait(<Future<void>>[reportLoad, listLoad]);
+
+      expect(controller.report, isNull);
+      expect(controller.reportList, isEmpty);
+
+      await controller.close();
+    });
+
+    test(
+      'close drains a pending deletion before disposing the client',
+      () async {
+        final platform = _FakePlatform()..deleteCompleter = Completer<void>();
+        final controller = _controller(platform);
+        await controller.initializeOrRestore('runtime-secret');
+
+        final deletion = controller.deleteSession('session-1', confirmed: true);
+        await Future<void>.delayed(Duration.zero);
+        final closing = controller.close();
+        await Future<void>.delayed(Duration.zero);
+
+        expect(platform.deleteCount, 1);
+        expect(platform.disposeCount, 0);
+
+        platform.deleteCompleter!.complete();
+        expect(await deletion, isTrue);
+        await closing;
+        expect(platform.disposeCount, 1);
+        expect(
+          platform.calls.indexOf('delete:session-1'),
+          lessThan(platform.calls.indexOf('dispose')),
+        );
+      },
+    );
 
     test(
       'preserves the client structured error instance and redacts details',
@@ -581,6 +680,9 @@ class _FakePlatform implements AsleepPlatform {
   Completer<void>? loggingEnableCompleter;
   Completer<void>? resumeCompleter;
   Completer<void>? deleteCompleter;
+  Completer<AsleepReport>? reportCompleter;
+  Completer<List<AsleepSession>>? reportListCompleter;
+  Object? disposeError;
   bool echoSetupKeyInError = false;
   String? setupApiKey;
   String? configuredApiKey;
@@ -592,6 +694,8 @@ class _FakePlatform implements AsleepPlatform {
   Stream<AsleepEvent> get events => _events.stream;
 
   void emit(AsleepEvent event) => _events.add(event);
+
+  void emitError(Object error) => _events.addError(error);
 
   @override
   Future<void> setup(AsleepSetupOptions options) async {
@@ -674,17 +778,7 @@ class _FakePlatform implements AsleepPlatform {
     if (reportError case final error?) {
       throw error;
     }
-    return AsleepReport(
-      timezone: 'UTC',
-      session: AsleepReportSession(
-        id: sessionId,
-        createdTimezone: 'UTC',
-        startTime: DateTime.utc(2026, 7, 1),
-        state: 'COMPLETE',
-      ),
-      missingDataRatio: 0,
-      peculiarities: const <String>[],
-    );
+    return await reportCompleter?.future ?? _reportFor(sessionId);
   }
 
   @override
@@ -693,14 +787,10 @@ class _FakePlatform implements AsleepPlatform {
     String toDate,
   ) async {
     calls.add('report-list:$fromDate:$toDate');
-    return <AsleepSession>[
-      AsleepSession(
-        id: 'session-1',
-        state: 'COMPLETE',
-        startTime: DateTime.utc(2026, 7, 1),
-        createdTimezone: 'UTC',
-      ),
-    ];
+    if (reportListCompleter case final completer?) {
+      return completer.future;
+    }
+    return <AsleepSession>[_sessionFor('session-1')];
   }
 
   @override
@@ -740,5 +830,27 @@ class _FakePlatform implements AsleepPlatform {
   Future<void> dispose() async {
     calls.add('dispose');
     disposeCount++;
+    if (disposeError case final error?) {
+      throw error;
+    }
   }
 }
+
+AsleepReport _reportFor(String sessionId) => AsleepReport(
+  timezone: 'UTC',
+  session: AsleepReportSession(
+    id: sessionId,
+    createdTimezone: 'UTC',
+    startTime: DateTime.utc(2026, 7, 1),
+    state: 'COMPLETE',
+  ),
+  missingDataRatio: 0,
+  peculiarities: const <String>[],
+);
+
+AsleepSession _sessionFor(String sessionId) => AsleepSession(
+  id: sessionId,
+  state: 'COMPLETE',
+  startTime: DateTime.utc(2026, 7, 1),
+  createdTimezone: 'UTC',
+);

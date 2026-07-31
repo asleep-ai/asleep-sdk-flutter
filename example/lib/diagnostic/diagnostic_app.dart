@@ -7,9 +7,22 @@ import 'diagnostic_controller.dart';
 
 /// Diagnostic application for the complete public Asleep SDK lifecycle.
 class AsleepExampleApp extends StatefulWidget {
-  const AsleepExampleApp({super.key, this.controller});
+  const AsleepExampleApp({super.key, this.controller})
+    : ownsController = controller == null,
+      closeController = null;
+
+  @visibleForTesting
+  const AsleepExampleApp.owned({
+    super.key,
+    required this.controller,
+    this.closeController,
+  }) : assert(controller != null),
+       ownsController = true;
 
   final DiagnosticController? controller;
+  final bool ownsController;
+  @visibleForTesting
+  final Future<void> Function(DiagnosticController controller)? closeController;
 
   @override
   State<AsleepExampleApp> createState() => _AsleepExampleAppState();
@@ -18,14 +31,26 @@ class AsleepExampleApp extends StatefulWidget {
 class _AsleepExampleAppState extends State<AsleepExampleApp> {
   late final DiagnosticController _controller =
       widget.controller ?? DiagnosticController.forCurrentPlatform();
-  late final bool _ownsController = widget.controller == null;
 
   @override
   void dispose() {
-    if (_ownsController) {
-      unawaited(_controller.close());
+    if (widget.ownsController) {
+      unawaited(_closeWithoutThrowing());
     }
     super.dispose();
+  }
+
+  Future<void> _closeWithoutThrowing() async {
+    try {
+      await (widget.closeController?.call(_controller) ?? _controller.close());
+    } catch (error) {
+      // Widget disposal cannot await or surface asynchronous cleanup failures.
+      // Do not print the error because native details may contain sensitive data.
+      debugPrint(
+        'Asleep diagnostic cleanup failed (${error.runtimeType}); '
+        'all cleanup steps were attempted.',
+      );
+    }
   }
 
   @override

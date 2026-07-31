@@ -13,9 +13,15 @@ class DiagnosticController extends ChangeNotifier {
     required AsleepClient client,
     required this.hostPlatform,
   }) : _client = client,
-       _snapshot = client.state {
+       _snapshot = client.state,
+       _recordingDeadCleanupRequired =
+           client.state.error?.category == AsleepErrorCategory.recordingDead &&
+           !client.state.didClose {
     _stateSubscription = _client.states.listen(_onSnapshot);
-    _eventSubscription = _client.events.listen(_onEvent);
+    _eventSubscription = _client.events.listen(
+      _onEvent,
+      onError: _onEventError,
+    );
   }
 
   factory DiagnosticController.forCurrentPlatform() {
@@ -39,6 +45,8 @@ class DiagnosticController extends ChangeNotifier {
   AsleepReport? _report;
   List<AsleepSession> _reportList = const <AsleepSession>[];
   AsleepAverageReport? _averageReport;
+  final Set<String> _deletedSessionIds = <String>{};
+  int _reportCacheGeneration = 0;
   AsleepAnalysisResult? _analysisResult;
   bool? _permissionsGranted;
   AsleepError? _operationError;
@@ -46,9 +54,12 @@ class DiagnosticController extends ChangeNotifier {
   String _lastEvent = 'No public events yet';
   bool _loggingEnabled = false;
   bool _deletionInFlight = false;
+  bool _recordingDeadCleanupRequired;
   bool _recoveryAwaitingUpload = false;
   bool _resumeInFlight = false;
   bool _closed = false;
+  int _activeOperationCount = 0;
+  Completer<void>? _operationsDrained;
   Future<void>? _closeFuture;
   Future<void> _loggingTransition = Future<void>.value();
 
@@ -66,9 +77,7 @@ class DiagnosticController extends ChangeNotifier {
   bool get deletionInFlight => _deletionInFlight;
   bool get recoveryAwaitingUpload => _recoveryAwaitingUpload;
   bool get canStopTracking =>
-      _snapshot.isTracking ||
-      (_snapshot.error?.category == AsleepErrorCategory.recordingDead &&
-          !_snapshot.didClose);
+      _snapshot.isTracking || _recordingDeadCleanupRequired;
   bool get canStartTracking => !canStopTracking;
 
   String? get operationErrorText => _safeErrorText(_operationError);
@@ -167,23 +176,41 @@ class DiagnosticController extends ChangeNotifier {
 
   Future<void> loadReport(String sessionId) async {
     final normalized = sessionId.trim();
+    final generation = _reportCacheGeneration;
     await _run('Detailed report loaded', () async {
-      _report = await _client.getReport(normalized);
+      final report = await _client.getReport(normalized);
+      if (_reportCacheGeneration == generation &&
+          !_deletedSessionIds.contains(report.session.id)) {
+        _report = report;
+      }
     });
   }
 
   Future<void> loadReportList(String fromDate, String toDate) async {
+    final generation = _reportCacheGeneration;
     await _run('Report list loaded', () async {
-      _reportList = await _client.getReportList(fromDate.trim(), toDate.trim());
+      final reports = await _client.getReportList(
+        fromDate.trim(),
+        toDate.trim(),
+      );
+      if (_reportCacheGeneration == generation) {
+        _reportList = reports
+            .where((session) => !_deletedSessionIds.contains(session.id))
+            .toList(growable: false);
+      }
     });
   }
 
   Future<void> loadAverageReport(String fromDate, String toDate) async {
+    final generation = _reportCacheGeneration;
     await _run('Average report loaded', () async {
-      _averageReport = await _client.getAverageReport(
+      final report = await _client.getAverageReport(
         fromDate.trim(),
         toDate.trim(),
       );
+      if (_reportCacheGeneration == generation) {
+        _averageReport = report;
+      }
     });
   }
 
@@ -208,12 +235,15 @@ class DiagnosticController extends ChangeNotifier {
     try {
       await _run('Session deleted', () async {
         await _client.deleteSession(normalized);
+        _deletedSessionIds.add(normalized);
+        _reportCacheGeneration++;
         if (_report?.session.id == normalized) {
           _report = null;
         }
         _reportList = _reportList
             .where((session) => session.id != normalized)
             .toList(growable: false);
+        _averageReport = null;
         deleted = true;
       });
       return deleted;
@@ -293,28 +323,33 @@ class DiagnosticController extends ChangeNotifier {
     if (_closed) {
       return false;
     }
-    _operationError = null;
-    _operationMessage = null;
-    _notify();
+    _beginOperation();
     try {
-      await action();
-      _operationMessage = successMessage;
+      _operationError = null;
+      _operationMessage = null;
       _notify();
-      return true;
-    } on AsleepException catch (error) {
-      _operationError = error.error ?? _client.state.error;
-      _operationMessage = 'Operation failed';
-    } catch (_) {
-      _operationError =
-          _client.state.error ??
-          AsleepError(
-            code: 'UNEXPECTED_FAILURE',
-            message: 'The operation failed without diagnostic details.',
-          );
-      _operationMessage = 'Operation failed';
+      try {
+        await action();
+        _operationMessage = successMessage;
+        _notify();
+        return true;
+      } on AsleepException catch (error) {
+        _operationError = error.error ?? _client.state.error;
+        _operationMessage = 'Operation failed';
+      } catch (_) {
+        _operationError =
+            _client.state.error ??
+            AsleepError(
+              code: 'UNEXPECTED_FAILURE',
+              message: 'The operation failed without diagnostic details.',
+            );
+        _operationMessage = 'Operation failed';
+      }
+      _notify();
+      return false;
+    } finally {
+      _endOperation();
     }
-    _notify();
-    return false;
   }
 
   Future<T?> _runValue<T>(Future<T> Function() action) async {
@@ -340,11 +375,17 @@ class DiagnosticController extends ChangeNotifier {
     if (event is DebugLogEvent) {
       return;
     }
+    if (event is TrackingCreatedEvent) {
+      _recordingDeadCleanupRequired = false;
+    }
     if (event is TrackingUploadedEvent && _recoveryAwaitingUpload) {
       _recoveryAwaitingUpload = false;
     }
-    if (event is TrackingClosedEvent && _recoveryAwaitingUpload) {
-      _recoveryAwaitingUpload = false;
+    if (event is TrackingClosedEvent) {
+      _recordingDeadCleanupRequired = false;
+      if (_recoveryAwaitingUpload) {
+        _recoveryAwaitingUpload = false;
+      }
     }
     if (event case AnalysisResultEvent(:final result)) {
       _analysisResult = result;
@@ -355,7 +396,38 @@ class DiagnosticController extends ChangeNotifier {
                 error.category == AsleepErrorCategory.recordingDead)) {
       _recoveryAwaitingUpload = false;
     }
+    if (event case TrackingFailedEvent(:final error)) {
+      if (error.category == AsleepErrorCategory.recordingDead) {
+        _recordingDeadCleanupRequired = true;
+      } else if (error.category == AsleepErrorCategory.terminal) {
+        _recordingDeadCleanupRequired = false;
+      }
+    }
     _lastEvent = _safeEventLabel(event);
+    _notify();
+  }
+
+  void _onEventError(Object streamError, StackTrace _) {
+    if (_closed) {
+      return;
+    }
+    final structuredError = switch (streamError) {
+      AsleepException(:final error?) => error,
+      _ => _client.state.error,
+    };
+    _operationError = structuredError == null
+        ? AsleepError(
+            code: 'EVENT_STREAM_FAILURE',
+            message: 'The native event stream failed.',
+          )
+        : AsleepError(
+            code: structuredError.code,
+            message: 'The native event stream failed.',
+            category: structuredError.category,
+            numericCode: structuredError.numericCode,
+          );
+    _operationMessage = 'Native event stream failed';
+    _lastEvent = 'Native event stream failed';
     _notify();
   }
 
@@ -384,6 +456,25 @@ class DiagnosticController extends ChangeNotifier {
     }
   }
 
+  void _beginOperation() {
+    if (_activeOperationCount == 0) {
+      _operationsDrained = Completer<void>();
+    }
+    _activeOperationCount++;
+  }
+
+  void _endOperation() {
+    _activeOperationCount--;
+    if (_activeOperationCount == 0) {
+      _operationsDrained!.complete();
+      _operationsDrained = null;
+    }
+  }
+
+  Future<void> _waitForActiveOperations() => _activeOperationCount == 0
+      ? Future<void>.value()
+      : _operationsDrained!.future;
+
   /// Turns logging off, cancels app subscriptions, then disposes the client.
   Future<void> close() {
     final activeClose = _closeFuture;
@@ -409,6 +500,7 @@ class DiagnosticController extends ChangeNotifier {
       }
     }
 
+    await cleanUp(_waitForActiveOperations);
     await cleanUp(() => _loggingTransition);
     await cleanUp(() => _client.setLoggingEnabled(false));
     await cleanUp(_stateSubscription.cancel);

@@ -39,6 +39,32 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('owned app contains asynchronous cleanup failures', (
+    tester,
+  ) async {
+    final platform = _WidgetFakePlatform();
+    final controller = DiagnosticController(
+      client: AsleepClient(platform: platform),
+      hostPlatform: DiagnosticHostPlatform.android,
+    );
+    var closeCount = 0;
+    await tester.pumpWidget(
+      AsleepExampleApp.owned(
+        controller: controller,
+        closeController: (_) {
+          closeCount++;
+          return Future<void>.error(StateError('secret cleanup detail'));
+        },
+      ),
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+
+    expect(closeCount, 1);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('requires explicit confirmation before deletion', (tester) async {
     _useTallSurface(tester);
     final platform = _WidgetFakePlatform();
@@ -157,6 +183,19 @@ void main() {
     );
     expect(start.onPressed, isNull);
     expect(stop.onPressed, isNotNull);
+
+    await tester.tap(find.text('Check permissions'));
+    await tester.pump();
+
+    final startAfterCommand = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Start tracking'),
+    );
+    final stopAfterCommand = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Stop tracking'),
+    );
+    expect(controller.snapshot.error, isNull);
+    expect(startAfterCommand.onPressed, isNull);
+    expect(stopAfterCommand.onPressed, isNotNull);
 
     await tester.pumpWidget(const SizedBox.shrink());
   });

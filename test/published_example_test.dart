@@ -42,6 +42,53 @@ void main() {
     );
   });
 
+  test('published state guide keeps recording-dead cleanup durable', () {
+    final guide = File('example/example.md').readAsStringSync();
+
+    expect(
+      guide,
+      contains(
+        'final canStop = snapshot.isTracking || '
+        'recordingDeadCleanupRequired;',
+      ),
+    );
+    expect(
+      guide,
+      contains(
+        'A successful stop request alone is\n'
+        'not close proof.',
+      ),
+    );
+  });
+
+  test('published event switch separates upload and analysis cases', () {
+    final guide = File('example/example.md').readAsStringSync();
+
+    expect(
+      guide,
+      contains(
+        'case TrackingUploadedEvent():\n'
+        '      // Upload progress, and iOS foreground-recovery proof when applicable.\n'
+        '      handleUploadProgress();\n'
+        '    case AnalysisResultEvent(:final result):',
+      ),
+    );
+  });
+
+  test('published ownership guide handles stream and shutdown failures', () {
+    final guide = File('example/example.md').readAsStringSync();
+
+    expect(guide, contains('onError: (Object error, StackTrace stackTrace)'));
+    expect(guide, contains('await Future.wait(activeOperations.toList());'));
+    expect(
+      guide,
+      contains(
+        'Widget shutdown cannot await `close()`; attach an\n'
+        'error handler',
+      ),
+    );
+  });
+
   test('published recovery guide releases ended-session state', () {
     final guide = File('example/example.md').readAsStringSync();
 

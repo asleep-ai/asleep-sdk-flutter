@@ -27,9 +27,16 @@ final current = client.state;
 final stateSubscription = client.states.listen((snapshot) {
   // Render durable state. Persist only app data that your policy permits.
 });
-final eventSubscription = client.events.listen((event) {
-  // Handle one-time facts. Never treat this stream as durable state.
-});
+final eventSubscription = client.events.listen(
+  (event) {
+    // Handle one-time facts. Never treat this stream as durable state.
+  },
+  onError: (Object error, StackTrace stackTrace) {
+    // Render only a mapped code/category from client.state.error.
+    // Never retain or display the raw stream error or native details.
+    renderRedactedEventError(client.state.error);
+  },
+);
 ```
 
 Read `client.state` as the immediate snapshot. The broadcast `states` stream
@@ -83,10 +90,10 @@ selects the correct public setup path and makes the app's decision observable.
 one-time native fact:
 
 ```dart
+bool recordingDeadCleanupRequired = false;
+
 void handleSnapshot(AsleepSnapshot snapshot) {
-  final canStop = snapshot.isTracking ||
-      (snapshot.error?.category == AsleepErrorCategory.recordingDead &&
-          !snapshot.didClose);
+  final canStop = snapshot.isTracking || recordingDeadCleanupRequired;
   // Drive buttons and status UI from snapshot and canStop.
 }
 
@@ -94,11 +101,20 @@ void handleEvent(AsleepEvent event) {
   switch (event) {
     case TrackingUploadedEvent():
       // Upload progress, and iOS foreground-recovery proof when applicable.
+      handleUploadProgress();
     case AnalysisResultEvent(:final result):
       // Canonical cross-platform analysis result.
       consumeAnalysis(result);
     case TrackingClosedEvent():
+      recordingDeadCleanupRequired = false;
       // One-time close fact; durable status is also present in the snapshot.
+    case TrackingFailedEvent(:final error):
+      if (error.category == AsleepErrorCategory.recordingDead) {
+        // Keep cleanup required even if a later command clears snapshot.error.
+        recordingDeadCleanupRequired = true;
+      } else if (error.category == AsleepErrorCategory.terminal) {
+        recordingDeadCleanupRequired = false;
+      }
     case DebugLogEvent():
       // Do not render, persist, or forward raw diagnostic text.
     default:
@@ -106,6 +122,12 @@ void handleEvent(AsleepEvent event) {
   }
 }
 ```
+
+Do not derive recording-dead cleanup solely from `snapshot.error`. A successful
+unrelated command may clear that error, while the native session still requires
+`stopTracking()`. Keep the application latch until `TrackingClosedEvent` or a
+terminal failure proves the session ended. A successful stop request alone is
+not close proof.
 
 Public command failures are `AsleepException`. For client command failures,
 `exception.error` is the same `AsleepError` instance published in
@@ -359,9 +381,12 @@ owner's cleanup idempotent so widget and application shutdown cannot run it
 twice:
 
 ```dart
+bool closing = false;
+final activeOperations = <Future<void>>{};
 Future<void>? closeFuture;
 
 Future<void> close() {
+  closing = true; // Command entry points must reject new work from here.
   return closeFuture ??= () async {
     Object? firstError;
     StackTrace? firstStackTrace;
@@ -375,6 +400,9 @@ Future<void> close() {
       }
     }
 
+    await cleanUp(() async {
+      await Future.wait(activeOperations.toList());
+    });
     await cleanUp(() => client.setLoggingEnabled(false));
     await cleanUp(stateSubscription.cancel);
     await cleanUp(eventSubscription.cancel);
@@ -387,7 +415,12 @@ Future<void> close() {
 }
 ```
 
-Do not issue commands after disposal.
+Track every setup, permission, battery, lifecycle, report, deletion, and logging
+operation in `activeOperations`. Reject new commands once `closing` is true,
+drain the tracked operations, and only then dispose the client. Do not issue
+commands after disposal. Widget shutdown cannot await `close()`; attach an
+error handler so a cleanup failure does not become an unhandled asynchronous
+error, and never print raw native error details.
 
 ## Responsibility boundary
 
