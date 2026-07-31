@@ -834,6 +834,7 @@ class AsleepClient {
     final eventErrorRevisionBefore = _eventErrorRevision;
     try {
       final result = await action();
+      _ensureOpen();
       _clearErrorIfUnchanged(errorBefore, eventErrorRevisionBefore);
       return result;
     } catch (error, stackTrace) {

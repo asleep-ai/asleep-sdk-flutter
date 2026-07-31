@@ -1379,6 +1379,21 @@ void main() {
       },
     );
 
+    test('in-flight command successes reject after disposal', () async {
+      await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
+      platform.permissionCompleter = Completer<bool>();
+      final permission = client.hasRequiredPermissions();
+      await client.dispose();
+      final terminalState = client.state;
+
+      platform.permissionCompleter!.complete(true);
+      final exception = await captureAsleepException(permission);
+
+      expect(exception.code, AsleepErrorCode.disposed);
+      expect(exception.error?.code, AsleepErrorCode.disposed.name);
+      expect(client.state, same(terminalState));
+    });
+
     test('clearError is a no-op from the terminal state listener', () async {
       Object? reentrantError;
       var observeTerminalState = false;
