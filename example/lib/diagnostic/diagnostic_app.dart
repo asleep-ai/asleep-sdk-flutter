@@ -1,0 +1,348 @@
+import 'dart:async';
+
+import 'package:asleep_sdk_flutter/asleep_sdk_flutter.dart';
+import 'package:flutter/material.dart';
+
+import 'diagnostic_controller.dart';
+
+/// Diagnostic application for the complete public Asleep SDK lifecycle.
+class AsleepExampleApp extends StatefulWidget {
+  const AsleepExampleApp({super.key, this.controller});
+
+  final DiagnosticController? controller;
+
+  @override
+  State<AsleepExampleApp> createState() => _AsleepExampleAppState();
+}
+
+class _AsleepExampleAppState extends State<AsleepExampleApp> {
+  late final DiagnosticController _controller =
+      widget.controller ?? DiagnosticController.forCurrentPlatform();
+  late final bool _ownsController = widget.controller == null;
+
+  @override
+  void dispose() {
+    if (_ownsController) {
+      unawaited(_controller.close());
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      home: DiagnosticPage(controller: _controller),
+      debugShowCheckedModeBanner: false,
+    );
+  }
+}
+
+class DiagnosticPage extends StatefulWidget {
+  const DiagnosticPage({required this.controller, super.key});
+
+  final DiagnosticController controller;
+
+  @override
+  State<DiagnosticPage> createState() => _DiagnosticPageState();
+}
+
+class _DiagnosticPageState extends State<DiagnosticPage>
+    with WidgetsBindingObserver {
+  final TextEditingController _apiKey = TextEditingController();
+  final TextEditingController _sessionId = TextEditingController(
+    text: 'session-id',
+  );
+  final TextEditingController _fromDate = TextEditingController(
+    text: '2026-07-01',
+  );
+  final TextEditingController _toDate = TextEditingController(
+    text: '2026-07-31',
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    unawaited(widget.controller.handleLifecycleState(state));
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _apiKey.dispose();
+    _sessionId.dispose();
+    _fromDate.dispose();
+    _toDate.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: widget.controller,
+      builder: (context, _) {
+        final controller = widget.controller;
+        final snapshot = controller.snapshot;
+        return Scaffold(
+          appBar: AppBar(title: const Text('Asleep SDK diagnostic')),
+          body: ListView(
+            padding: const EdgeInsets.all(24),
+            children: <Widget>[
+              const Text(
+                'Use a non-production account. Diagnostic logging can contain '
+                'sensitive SDK context and is never rendered by this app.',
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                key: const Key('api-key'),
+                controller: _apiKey,
+                obscureText: true,
+                enableSuggestions: false,
+                autocorrect: false,
+                decoration: const InputDecoration(
+                  labelText: 'Runtime API key',
+                  helperText: 'Passed to one command, then cleared.',
+                ),
+              ),
+              const SizedBox(height: 8),
+              FilledButton(
+                onPressed: () {
+                  final runtimeApiKey = _apiKey.text;
+                  _apiKey.clear();
+                  unawaited(controller.initializeOrRestore(runtimeApiKey));
+                },
+                child: const Text('Initialize / restore'),
+              ),
+              const Divider(height: 32),
+              const Text('Permissions and Android battery settings'),
+              _ButtonWrap(
+                children: <Widget>[
+                  OutlinedButton(
+                    onPressed: () => unawaited(controller.checkPermissions()),
+                    child: const Text('Check permissions'),
+                  ),
+                  OutlinedButton(
+                    onPressed: () => unawaited(controller.requestPermissions()),
+                    child: const Text('Request permissions'),
+                  ),
+                  OutlinedButton(
+                    onPressed:
+                        controller.hostPlatform ==
+                            DiagnosticHostPlatform.android
+                        ? () => unawaited(controller.openBatterySettings())
+                        : null,
+                    child: const Text('Open battery settings'),
+                  ),
+                  OutlinedButton(
+                    onPressed: () =>
+                        unawaited(controller.recheckBatteryOptimization()),
+                    child: const Text('Recheck battery'),
+                  ),
+                ],
+              ),
+              const Divider(height: 32),
+              const Text('Tracking and analysis'),
+              _ButtonWrap(
+                children: <Widget>[
+                  FilledButton.tonal(
+                    onPressed: snapshot.isTracking
+                        ? null
+                        : () => unawaited(controller.startTracking()),
+                    child: const Text('Start tracking'),
+                  ),
+                  FilledButton.tonal(
+                    onPressed:
+                        snapshot.trackingStatus == TrackingStatus.paused ||
+                            snapshot.trackingStatus ==
+                                TrackingStatus.recoveryRequired
+                        ? () => unawaited(controller.resumeTracking())
+                        : null,
+                    child: const Text('Resume tracking'),
+                  ),
+                  FilledButton.tonal(
+                    onPressed: snapshot.isTracking
+                        ? () => unawaited(controller.stopTracking())
+                        : null,
+                    child: const Text('Stop tracking'),
+                  ),
+                  OutlinedButton(
+                    onPressed:
+                        snapshot.trackingStatus == TrackingStatus.tracking
+                        ? () => unawaited(controller.requestAnalysis())
+                        : null,
+                    child: const Text('Request analysis'),
+                  ),
+                ],
+              ),
+              if (controller.recoveryAwaitingUpload)
+                const Text(
+                  'Recovery requested; waiting for a later tracking upload.',
+                ),
+              const Divider(height: 32),
+              TextField(
+                controller: _sessionId,
+                decoration: const InputDecoration(labelText: 'Session ID'),
+              ),
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: TextField(
+                      controller: _fromDate,
+                      decoration: const InputDecoration(
+                        labelText: 'From (YYYY-MM-DD)',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: _toDate,
+                      decoration: const InputDecoration(
+                        labelText: 'To (YYYY-MM-DD)',
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              _ButtonWrap(
+                children: <Widget>[
+                  OutlinedButton(
+                    onPressed: () =>
+                        unawaited(controller.loadReport(_sessionId.text)),
+                    child: const Text('Detailed report'),
+                  ),
+                  OutlinedButton(
+                    onPressed: () => unawaited(
+                      controller.loadReportList(_fromDate.text, _toDate.text),
+                    ),
+                    child: const Text('Report list'),
+                  ),
+                  OutlinedButton(
+                    onPressed: () => unawaited(
+                      controller.loadAverageReport(
+                        _fromDate.text,
+                        _toDate.text,
+                      ),
+                    ),
+                    child: const Text('Average report'),
+                  ),
+                  OutlinedButton(
+                    onPressed: () => _confirmDeletion(context),
+                    child: const Text('Delete session'),
+                  ),
+                ],
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Native diagnostic logging'),
+                subtitle: const Text(
+                  'Debug log payloads are intentionally not shown.',
+                ),
+                value: controller.loggingEnabled,
+                onChanged: (enabled) =>
+                    unawaited(controller.setLoggingEnabled(enabled)),
+              ),
+              const Divider(height: 32),
+              _StatusRow('Setup', snapshot.setupStatus.name),
+              _StatusRow('Tracking', snapshot.trackingStatus.name),
+              _StatusRow(
+                'Battery',
+                controller.batteryStatus?.exempted.toString() ?? 'unchecked',
+              ),
+              _StatusRow('Last event', controller.lastEvent),
+              _StatusRow(
+                'Detailed report',
+                controller.report == null ? 'not loaded' : 'loaded',
+              ),
+              _StatusRow(
+                'Report list',
+                '${controller.reportList.length} session(s)',
+              ),
+              _StatusRow(
+                'Average report',
+                controller.averageReport == null ? 'not loaded' : 'loaded',
+              ),
+              _StatusRow(
+                'Analysis result',
+                controller.analysisResult == null ? 'not received' : 'received',
+              ),
+              if (controller.operationMessage case final message?)
+                _StatusRow('Operation', message),
+              if (controller.operationErrorText case final error?)
+                Text(
+                  error,
+                  key: const Key('operation-error'),
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _confirmDeletion(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Permanently delete this session?'),
+        content: const Text(
+          'This action is irreversible. The SDK does not provide an undo.',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete permanently'),
+          ),
+        ],
+      ),
+    );
+    await widget.controller.deleteSession(
+      _sessionId.text,
+      confirmed: confirmed ?? false,
+    );
+  }
+}
+
+class _ButtonWrap extends StatelessWidget {
+  const _ButtonWrap({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Wrap(spacing: 8, runSpacing: 8, children: children),
+    );
+  }
+}
+
+class _StatusRow extends StatelessWidget {
+  const _StatusRow(this.label, this.value);
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          SizedBox(width: 120, child: Text(label)),
+          Expanded(child: Text(value)),
+        ],
+      ),
+    );
+  }
+}

@@ -11,6 +11,10 @@ tracking.
 > privacy readiness and unattended overnight tracking have not been certified
 > for this release.
 
+For the complete application lifecycle, platform-specific recovery patterns,
+report handling, privacy boundaries, and production checklist, see the
+[production integration guide](https://pub.dev/packages/asleep_sdk_flutter/example).
+
 ## Contract snapshot
 
 | Layer | Experimental 0.1.0 baseline |
