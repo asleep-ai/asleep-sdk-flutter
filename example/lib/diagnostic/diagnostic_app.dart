@@ -72,7 +72,6 @@ class DiagnosticPage extends StatefulWidget {
 
 class _DiagnosticPageState extends State<DiagnosticPage>
     with WidgetsBindingObserver {
-  bool _deletionFlowInFlight = false;
   final TextEditingController _apiKey = TextEditingController();
   final TextEditingController _sessionId = TextEditingController(
     text: 'session-id',
@@ -283,8 +282,7 @@ class _DiagnosticPageState extends State<DiagnosticPage>
                     child: const Text('Average report'),
                   ),
                   OutlinedButton(
-                    onPressed:
-                        _deletionFlowInFlight || controller.deletionInFlight
+                    onPressed: controller.deletionInFlightFor(_sessionId.text)
                         ? null
                         : () => unawaited(_confirmDeletion(context)),
                     child: const Text('Delete session'),
@@ -359,43 +357,32 @@ class _DiagnosticPageState extends State<DiagnosticPage>
   }
 
   Future<void> _confirmDeletion(BuildContext context) async {
-    if (_deletionFlowInFlight) {
-      return;
-    }
     final sessionId = _sessionId.text;
-    setState(() => _deletionFlowInFlight = true);
-    try {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Permanently delete this session?'),
-          content: const Text(
-            'This action is irreversible. The SDK does not provide an undo.',
+    await widget.controller.deleteSession(
+      sessionId,
+      confirmIrreversibleAction: () async {
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Permanently delete this session?'),
+            content: const Text(
+              'This action is irreversible. The SDK does not provide an undo.',
+            ),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Delete permanently'),
+              ),
+            ],
           ),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Delete permanently'),
-            ),
-          ],
-        ),
-      );
-      if (!mounted) {
-        return;
-      }
-      await widget.controller.deleteSession(
-        sessionId,
-        confirmed: confirmed ?? false,
-      );
-    } finally {
-      if (mounted) {
-        setState(() => _deletionFlowInFlight = false);
-      }
-    }
+        );
+        return confirmed ?? false;
+      },
+    );
   }
 }
 
