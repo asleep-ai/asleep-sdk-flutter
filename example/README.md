@@ -1,4 +1,7 @@
-# asleep_sdk_flutter_example
+# Asleep SDK Flutter diagnostic
+
+This app exercises the package's complete public lifecycle. Read the
+[production integration guide](example.md) before using it.
 
 Demonstrates how to use the asleep_sdk_flutter plugin.
 

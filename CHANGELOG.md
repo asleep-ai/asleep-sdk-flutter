@@ -4,6 +4,8 @@
   consumers from staged release candidates and exact hosted versions.
 - Document the supported native build toolchains and the deliberate iOS 15
   deployment target.
+- Add a publishable production integration guide and a tested diagnostic app
+  for the complete public lifecycle.
 
 ## 0.1.0
 
