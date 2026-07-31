@@ -1654,6 +1654,27 @@ void main() {
       },
     );
 
+    test(
+      'manual analysis ignores immediate result until canonical event',
+      () async {
+        final platform = _FakePlatform()
+          ..analysisResult = AsleepAnalysisResult(id: 'immediate');
+        final controller = _controller(platform);
+        await controller.initializeOrRestore('runtime-secret');
+        platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
+
+        await controller.requestAnalysis();
+
+        expect(controller.analysisResult, isNull);
+        platform.emit(
+          AnalysisResultEvent(result: AsleepAnalysisResult(id: 'event')),
+        );
+        expect(controller.analysisResult?.id, 'event');
+
+        await controller.close();
+      },
+    );
+
     test('exercises tracking, analysis, and every report form', () async {
       final platform = _FakePlatform();
       final controller = _controller(platform);
@@ -1661,9 +1682,7 @@ void main() {
 
       await controller.startTracking();
       platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
-      platform.analysisResult = AsleepAnalysisResult(id: 'immediate');
       await controller.requestAnalysis();
-      expect(controller.analysisResult?.id, 'immediate');
       platform.emit(
         AnalysisResultEvent(result: AsleepAnalysisResult(id: 'event')),
       );
@@ -1977,14 +1996,20 @@ void main() {
       await controller.initializeOrRestore('runtime-secret');
 
       expect(
-        await controller.deleteSession('session-1', confirmed: false),
+        await controller.deleteSession(
+          'session-1',
+          confirmIrreversibleAction: () async => false,
+        ),
         isFalse,
       );
       expect(platform.deleteCount, 0);
       expect(controller.operationMessage, isNot(contains('deleted')));
 
       expect(
-        await controller.deleteSession('session-1', confirmed: true),
+        await controller.deleteSession(
+          'session-1',
+          confirmIrreversibleAction: () async => true,
+        ),
         isTrue,
       );
       expect(platform.deleteCount, 1);
@@ -1992,23 +2017,96 @@ void main() {
       await controller.close();
     });
 
-    test('deduplicates concurrent confirmed deletion requests', () async {
-      final platform = _FakePlatform()..deleteCompleter = Completer<void>();
+    test('coalesces the complete deletion flow per session ID', () async {
+      final platform = _FakePlatform()
+        ..deleteCompleters['session-a'] = Completer<void>()
+        ..deleteCompleters['session-b'] = Completer<void>();
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+      final confirmations = <String, Completer<bool>>{
+        'session-a': Completer<bool>(),
+        'session-b': Completer<bool>(),
+      };
+      final confirmationCalls = <String, int>{};
+
+      Future<bool> confirm(String sessionId) {
+        confirmationCalls.update(
+          sessionId,
+          (count) => count + 1,
+          ifAbsent: () => 1,
+        );
+        return confirmations[sessionId]!.future;
+      }
+
+      final firstA = controller.deleteSession(
+        'session-a',
+        confirmIrreversibleAction: () => confirm('session-a'),
+      );
+      final duplicateA = controller.deleteSession(
+        'session-a',
+        confirmIrreversibleAction: () => confirm('session-a'),
+      );
+      final firstB = controller.deleteSession(
+        'session-b',
+        confirmIrreversibleAction: () => confirm('session-b'),
+      );
+
+      expect(duplicateA, same(firstA));
+      expect(firstB, isNot(same(firstA)));
+      expect(confirmationCalls, <String, int>{'session-a': 1, 'session-b': 1});
+      expect(controller.deletionInFlightFor('session-a'), isTrue);
+      expect(controller.deletionInFlightFor('session-b'), isTrue);
+
+      confirmations['session-a']!.complete(true);
+      confirmations['session-b']!.complete(true);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.deletionInFlight, isTrue);
+      expect(platform.deleteCount, 2);
+      platform.deleteCompleters['session-a']!.complete();
+      platform.deleteCompleters['session-b']!.complete();
+      expect(await firstA, isTrue);
+      expect(await duplicateA, isTrue);
+      expect(await firstB, isTrue);
+      expect(controller.deletionInFlight, isFalse);
+      expect(platform.deleteCount, 2);
+
+      await controller.close();
+    });
+
+    test('clears deletion latch after cancellation and failure', () async {
+      final platform = _FakePlatform();
       final controller = _controller(platform);
       await controller.initializeOrRestore('runtime-secret');
 
-      final first = controller.deleteSession('session-1', confirmed: true);
-      await Future<void>.delayed(Duration.zero);
-      final duplicate = controller.deleteSession('session-1', confirmed: true);
+      expect(
+        await controller.deleteSession(
+          'session-1',
+          confirmIrreversibleAction: () async => false,
+        ),
+        isFalse,
+      );
+      expect(controller.deletionInFlightFor('session-1'), isFalse);
 
-      expect(controller.deletionInFlight, isTrue);
-      expect(platform.deleteCount, 1);
-      expect(await duplicate, isFalse);
+      platform.deleteError = StateError('delete failed');
+      expect(
+        await controller.deleteSession(
+          'session-1',
+          confirmIrreversibleAction: () async => true,
+        ),
+        isFalse,
+      );
+      expect(controller.deletionInFlightFor('session-1'), isFalse);
 
-      platform.deleteCompleter!.complete();
-      expect(await first, isTrue);
-      expect(controller.deletionInFlight, isFalse);
-      expect(platform.deleteCount, 1);
+      platform.deleteError = null;
+      expect(
+        await controller.deleteSession(
+          'session-1',
+          confirmIrreversibleAction: () async => true,
+        ),
+        isTrue,
+      );
+      expect(platform.deleteCount, 2);
 
       await controller.close();
     });
@@ -2028,7 +2126,10 @@ void main() {
       expect(controller.averageReport, isNotNull);
 
       expect(
-        await controller.deleteSession('session-1', confirmed: true),
+        await controller.deleteSession(
+          'session-1',
+          confirmIrreversibleAction: () async => true,
+        ),
         isTrue,
       );
       expect(controller.report, isNull);
@@ -2049,7 +2150,10 @@ void main() {
       final listLoad = controller.loadReportList('2026-07-01', '2026-07-31');
       await Future<void>.delayed(Duration.zero);
       expect(
-        await controller.deleteSession('session-1', confirmed: true),
+        await controller.deleteSession(
+          'session-1',
+          confirmIrreversibleAction: () async => true,
+        ),
         isTrue,
       );
 
@@ -2079,7 +2183,10 @@ void main() {
       );
       await Future<void>.delayed(Duration.zero);
       expect(
-        await controller.deleteSession('session-1', confirmed: true),
+        await controller.deleteSession(
+          'session-1',
+          confirmIrreversibleAction: () async => true,
+        ),
         isTrue,
       );
       platform.averageReportCompleter!.complete(
@@ -2104,7 +2211,10 @@ void main() {
       final listLoad = controller.loadReportList('2026-07-01', '2026-07-31');
       await Future<void>.delayed(Duration.zero);
       expect(
-        await controller.deleteSession('session-b', confirmed: true),
+        await controller.deleteSession(
+          'session-b',
+          confirmIrreversibleAction: () async => true,
+        ),
         isTrue,
       );
 
@@ -2214,7 +2324,10 @@ void main() {
         final controller = _controller(platform);
         await controller.initializeOrRestore('runtime-secret');
 
-        final deletion = controller.deleteSession('session-1', confirmed: true);
+        final deletion = controller.deleteSession(
+          'session-1',
+          confirmIrreversibleAction: () async => true,
+        );
         await Future<void>.delayed(Duration.zero);
         final closing = controller.close();
         await Future<void>.delayed(Duration.zero);
@@ -2409,6 +2522,9 @@ class _FakePlatform implements AsleepPlatform {
   Object? batteryCheckError;
   Completer<AnalysisRequest>? analysisCompleter;
   Completer<void>? deleteCompleter;
+  final Map<String, Completer<void>> deleteCompleters =
+      <String, Completer<void>>{};
+  Object? deleteError;
   Completer<AsleepReport>? reportCompleter;
   Completer<List<AsleepSession>>? reportListCompleter;
   Completer<AsleepAverageReport>? averageReportCompleter;
@@ -2584,6 +2700,13 @@ class _FakePlatform implements AsleepPlatform {
   Future<void> deleteSession(String sessionId) async {
     calls.add('delete:$sessionId');
     deleteCount++;
+    if (deleteError case final error?) {
+      throw error;
+    }
+    if (deleteCompleters[sessionId] case final completer?) {
+      await completer.future;
+      return;
+    }
     await deleteCompleter?.future;
   }
 

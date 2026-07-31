@@ -76,7 +76,7 @@ class DiagnosticController extends ChangeNotifier {
   String? _operationMessage;
   String _lastEvent = 'No public events yet';
   bool _loggingEnabled = false;
-  bool _deletionInFlight = false;
+  final Map<String, Future<bool>> _deletionsInFlight = <String, Future<bool>>{};
   bool _sdkPrepared;
   bool _sdkPreparationAllowed;
   bool _sdkConfigureRetryAllowed = false;
@@ -112,7 +112,9 @@ class DiagnosticController extends ChangeNotifier {
   String? get operationMessage => _operationMessage;
   String get lastEvent => _lastEvent;
   bool get loggingEnabled => _loggingEnabled;
-  bool get deletionInFlight => _deletionInFlight;
+  bool get deletionInFlight => _deletionsInFlight.isNotEmpty;
+  bool deletionInFlightFor(String sessionId) =>
+      _deletionsInFlight.containsKey(sessionId.trim());
   bool get sdkPrepared => _sdkPrepared;
   bool get sdkPreparationInFlight => _sdkPreparationInFlight;
   bool get analysisRequestInFlight => _analysisRequestInFlight;
@@ -433,10 +435,7 @@ class DiagnosticController extends ChangeNotifier {
   Future<void> _requestAnalysis(Completer<void> completion) async {
     try {
       await _run('Analysis requested', () async {
-        final request = await _client.requestAnalysis();
-        if (request.immediateResult case final result?) {
-          _analysisResult = result;
-        }
+        await _client.requestAnalysis();
       });
     } finally {
       _analysisRequestInFlight = false;
@@ -521,42 +520,55 @@ class DiagnosticController extends ChangeNotifier {
     );
   }
 
-  /// Deletes only after the app's irreversible-action UI has confirmed.
+  /// Coalesces confirmation and deletion into one operation per session.
   Future<bool> deleteSession(
     String sessionId, {
-    required bool confirmed,
-  }) async {
-    if (_deletionInFlight) {
-      return false;
-    }
-    if (!confirmed) {
-      _operationError = null;
-      _operationMessage = 'Deletion cancelled';
-      _notify();
-      return false;
-    }
+    required Future<bool> Function() confirmIrreversibleAction,
+  }) {
     final normalized = sessionId.trim();
-    _deletionInFlight = true;
+    final activeDeletion = _deletionsInFlight[normalized];
+    if (activeDeletion != null) {
+      return activeDeletion;
+    }
+    late final Future<bool> operation;
+    operation = _deleteAfterConfirmation(normalized, confirmIrreversibleAction)
+        .whenComplete(() {
+          if (identical(_deletionsInFlight[normalized], operation)) {
+            _deletionsInFlight.remove(normalized);
+          }
+          _notify();
+        });
+    _deletionsInFlight[normalized] = operation;
     _notify();
-    var deleted = false;
+    return operation;
+  }
+
+  Future<bool> _deleteAfterConfirmation(
+    String sessionId,
+    Future<bool> Function() confirmIrreversibleAction,
+  ) async {
+    _beginOperation();
     try {
-      await _run('Session deleted', () async {
-        await _client.deleteSession(normalized);
-        _deletedSessionIds.add(normalized);
+      if (!await confirmIrreversibleAction()) {
+        _operationError = null;
+        _operationMessage = 'Deletion cancelled';
+        _notify();
+        return false;
+      }
+      return _runWithOutcome('Session deleted', () async {
+        await _client.deleteSession(sessionId);
+        _deletedSessionIds.add(sessionId);
         _averageReportCacheGeneration++;
-        if (_report?.session.id == normalized) {
+        if (_report?.session.id == sessionId) {
           _report = null;
         }
         _reportList = _reportList
-            .where((session) => session.id != normalized)
+            .where((session) => session.id != sessionId)
             .toList(growable: false);
         _averageReport = null;
-        deleted = true;
       });
-      return deleted;
     } finally {
-      _deletionInFlight = false;
-      _notify();
+      _endOperation();
     }
   }
 

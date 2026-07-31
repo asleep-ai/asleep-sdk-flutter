@@ -331,15 +331,14 @@ Request analysis while the session is actively tracking:
 
 ```dart
 final acknowledgement = await client.requestAnalysis();
-if (acknowledgement.immediateResult case final result?) {
-  // Android may provide an immediate result.
-  consumeAnalysis(result);
-}
+// Use only acknowledgement status for request-progress UI.
+showAnalysisRequestStatus(acknowledgement.status);
 ```
 
-Android may return an immediate result after native retry processing. iOS
-returns an acknowledgement and later emits `AnalysisResultEvent`. The event is
-the canonical result path on both platforms.
+Android may include an immediate result in the acknowledgement after native
+retry processing. Do not consume it there: the same result arrives through
+`AnalysisResultEvent`, which is the single canonical result path on both
+platforms.
 
 ## Reports and irreversible deletion
 
@@ -360,7 +359,32 @@ irreversible-action confirmation and call the SDK exactly once only after
 confirmation:
 
 ```dart
+final deletionsInFlight = <String, Future<void>>{};
+
 Future<void> deleteAfterConfirmation(
+  AsleepClient client,
+  String sessionId,
+  Future<bool> Function() confirmIrreversibleAction,
+) {
+  final activeDeletion = deletionsInFlight[sessionId];
+  if (activeDeletion != null) {
+    return activeDeletion;
+  }
+  late final Future<void> operation;
+  operation = _deleteAfterConfirmation(
+    client,
+    sessionId,
+    confirmIrreversibleAction,
+  ).whenComplete(() {
+    if (identical(deletionsInFlight[sessionId], operation)) {
+      deletionsInFlight.remove(sessionId);
+    }
+  });
+  deletionsInFlight[sessionId] = operation;
+  return operation;
+}
+
+Future<void> _deleteAfterConfirmation(
   AsleepClient client,
   String sessionId,
   Future<bool> Function() confirmIrreversibleAction,
@@ -464,12 +488,12 @@ error, and never print raw native error details.
       success.
 - [ ] Start, stop, recording-dead cleanup, and bounded transient retries are
       verified from current snapshot state.
-- [ ] Android immediate analysis and cross-platform `AnalysisResultEvent`
-      handling are covered.
+- [ ] Manual analysis is consumed exactly once from `AnalysisResultEvent` on
+      both platforms.
 - [ ] Detailed, list, and average reports are covered without logging report
       data.
-- [ ] Destructive deletion has an irreversible confirmation and updates UI only
-      after success.
+- [ ] Destructive deletion has one application-level in-flight operation
+      spanning confirmation and deletion, and updates UI only after success.
 - [ ] Raw debug/native details are filtered under the application's privacy and
       retention policy.
 - [ ] Cleanup runs once in the order logging off, subscriptions cancelled,
