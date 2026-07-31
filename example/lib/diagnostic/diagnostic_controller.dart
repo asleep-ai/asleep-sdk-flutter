@@ -57,6 +57,8 @@ class DiagnosticController extends ChangeNotifier {
   String _lastEvent = 'No public events yet';
   bool _loggingEnabled = false;
   bool _deletionInFlight = false;
+  bool _startInFlight = false;
+  int _startOutcomeGeneration = 0;
   bool _recordingDeadCleanupRequired;
   bool _recoveryAwaitingUpload = false;
   bool _resumeInFlight = false;
@@ -80,7 +82,7 @@ class DiagnosticController extends ChangeNotifier {
   bool get deletionInFlight => _deletionInFlight;
   bool get recoveryAwaitingUpload => _recoveryAwaitingUpload;
   bool get canStopTracking =>
-      _snapshot.isTracking || _recordingDeadCleanupRequired;
+      _snapshot.isTracking || _startInFlight || _recordingDeadCleanupRequired;
   bool get canStartTracking => !canStopTracking;
 
   String? get operationErrorText => _safeErrorText(_operationError);
@@ -148,38 +150,54 @@ class DiagnosticController extends ChangeNotifier {
   Future<bool?> openBatterySettings() =>
       _runValue(_client.requestBatteryOptimizationExemption);
 
-  Future<void> startTracking() => _run('Tracking start requested', () async {
-    final options = switch (hostPlatform) {
-      DiagnosticHostPlatform.android => const AsleepTrackingOptions(
-        androidNotification: AndroidNotificationOptions(
-          title: 'Sleep tracking',
-          text: 'Asleep diagnostic session is recording',
-        ),
-      ),
-      DiagnosticHostPlatform.ios => const AsleepTrackingOptions(
-        iosAudioSessionOptions: <IosAudioSessionOption>[
-          IosAudioSessionOption.allowBluetoothA2DP,
-        ],
-      ),
-    };
-    try {
-      await _client.startTracking(options);
-      if (hostPlatform == DiagnosticHostPlatform.android) {
-        _permissionsGranted = true;
-      }
-    } on AsleepException catch (error) {
-      if (hostPlatform == DiagnosticHostPlatform.android &&
-          error.code == AsleepErrorCode.permissionRequired) {
-        _permissionsGranted = false;
-      }
-      rethrow;
+  Future<void> startTracking() async {
+    if (_startInFlight || _closed) {
+      return;
     }
-  });
+    _startInFlight = true;
+    final outcomeGeneration = ++_startOutcomeGeneration;
+    _notify();
+    try {
+      await _runWithOutcome(
+        'Tracking start requested',
+        () async {
+          final options = switch (hostPlatform) {
+            DiagnosticHostPlatform.android => const AsleepTrackingOptions(
+              androidNotification: AndroidNotificationOptions(
+                title: 'Sleep tracking',
+                text: 'Asleep diagnostic session is recording',
+              ),
+            ),
+            DiagnosticHostPlatform.ios => const AsleepTrackingOptions(
+              iosAudioSessionOptions: <IosAudioSessionOption>[
+                IosAudioSessionOption.allowBluetoothA2DP,
+              ],
+            ),
+          };
+          try {
+            await _client.startTracking(options);
+            _permissionsGranted = true;
+          } on AsleepException catch (error) {
+            if (error.code == AsleepErrorCode.permissionRequired) {
+              _permissionsGranted = false;
+            }
+            rethrow;
+          }
+        },
+        shouldCommitOutcome: () => _startOutcomeGeneration == outcomeGeneration,
+      );
+    } finally {
+      _startInFlight = false;
+      _notify();
+    }
+  }
 
   Future<void> resumeTracking() => _resumeForForeground();
 
-  Future<void> stopTracking() =>
-      _run('Tracking stop requested', _client.stopTracking);
+  Future<void> stopTracking() async {
+    _startOutcomeGeneration++;
+    await _run('Tracking stopped', _client.stopTracking);
+  }
 
   Future<void> requestAnalysis() => _run('Analysis requested', () async {
     final request = await _client.requestAnalysis();

@@ -239,6 +239,64 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('Stop cancels a pending start', (tester) async {
+    _useTallSurface(tester);
+    final platform = _WidgetFakePlatform()..startCompleter = Completer<void>();
+    final controller = DiagnosticController(
+      client: AsleepClient(platform: platform),
+      hostPlatform: DiagnosticHostPlatform.android,
+    );
+    await controller.initializeOrRestore('runtime-secret');
+    await tester.pumpWidget(AsleepExampleApp(controller: controller));
+
+    await tester.tap(find.text('Start tracking'));
+    await tester.pump();
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Start tracking'),
+          )
+          .onPressed,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Stop tracking'),
+          )
+          .onPressed,
+      isNotNull,
+    );
+
+    await tester.tap(find.text('Stop tracking'));
+    await tester.pump();
+    expect(platform.stopCount, 1);
+    platform.startCompleter!.completeError(StateError('start cancelled'));
+    await tester.pumpAndSettle();
+
+    expect(controller.operationMessage, 'Tracking stopped');
+    expect(controller.operationError, isNull);
+    expect(find.text('Tracking stopped'), findsOneWidget);
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Start tracking'),
+          )
+          .onPressed,
+      isNotNull,
+    );
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Stop tracking'),
+          )
+          .onPressed,
+      isNull,
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('renders snapshot errors without message or native details', (
     tester,
   ) async {
@@ -283,7 +341,9 @@ class _WidgetFakePlatform implements AsleepPlatform {
   final StreamController<AsleepEvent> _events =
       StreamController<AsleepEvent>.broadcast(sync: true);
   int deleteCount = 0;
+  int stopCount = 0;
   Completer<void>? deleteCompleter;
+  Completer<void>? startCompleter;
   bool permissionsGranted = true;
   bool permissionRequestResult = true;
 
@@ -316,13 +376,17 @@ class _WidgetFakePlatform implements AsleepPlatform {
   Future<bool> requestRequiredPermissions() async => permissionRequestResult;
 
   @override
-  Future<void> startTracking(AsleepTrackingOptions options) async {}
+  Future<void> startTracking(AsleepTrackingOptions options) async {
+    await startCompleter?.future;
+  }
 
   @override
   Future<void> resumeTracking() async {}
 
   @override
-  Future<void> stopTracking() async {}
+  Future<void> stopTracking() async {
+    stopCount++;
+  }
 
   @override
   Future<AnalysisRequest> requestAnalysis() async =>

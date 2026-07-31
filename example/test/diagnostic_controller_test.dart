@@ -117,6 +117,46 @@ void main() {
       await controller.close();
     });
 
+    test('successful iOS start records granted permissions', () async {
+      final platform = _FakePlatform();
+      final controller = _controller(
+        platform,
+        hostPlatform: DiagnosticHostPlatform.ios,
+      );
+      await controller.initializeOrRestore('runtime-secret');
+
+      expect(controller.permissionsGranted, isNull);
+      await controller.startTracking();
+      expect(controller.permissionsGranted, isTrue);
+
+      await controller.close();
+    });
+
+    test('Stop cancels a pending start and restores eligibility', () async {
+      final platform = _FakePlatform()..startCompleter = Completer<void>();
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+
+      final start = controller.startTracking();
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.snapshot.trackingStatus, TrackingStatus.idle);
+      expect(controller.canStartTracking, isFalse);
+      expect(controller.canStopTracking, isTrue);
+
+      await controller.stopTracking();
+      expect(platform.calls, contains('stop'));
+      platform.startCompleter!.completeError(StateError('start cancelled'));
+      await start;
+
+      expect(controller.canStartTracking, isTrue);
+      expect(controller.canStopTracking, isFalse);
+      expect(controller.permissionsGranted, isNull);
+      expect(controller.operationMessage, 'Tracking stopped');
+      expect(controller.operationError, isNull);
+
+      await controller.close();
+    });
+
     test('keeps recording-dead sessions stoppable and not startable', () async {
       final platform = _FakePlatform();
       final controller = _controller(platform);
@@ -929,6 +969,7 @@ class _FakePlatform implements AsleepPlatform {
   AsleepAnalysisResult? analysisResult;
   Completer<void>? loggingEnableCompleter;
   Completer<void>? resumeCompleter;
+  Completer<void>? startCompleter;
   Completer<void>? deleteCompleter;
   Completer<AsleepReport>? reportCompleter;
   Completer<List<AsleepSession>>? reportListCompleter;
@@ -1006,6 +1047,7 @@ class _FakePlatform implements AsleepPlatform {
   @override
   Future<void> startTracking(AsleepTrackingOptions options) async {
     calls.add('start');
+    await startCompleter?.future;
   }
 
   @override
