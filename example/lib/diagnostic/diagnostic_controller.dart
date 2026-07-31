@@ -233,6 +233,10 @@ class DiagnosticController extends ChangeNotifier {
             if (error.code == AsleepErrorCode.permissionRequired) {
               _permissionsGranted = false;
             }
+            if (error.nativeCode == 'TRACKING_START_TIMEOUT') {
+              _trackingRestorationRequired = true;
+              _trackingClosePending = false;
+            }
             rethrow;
           }
         },

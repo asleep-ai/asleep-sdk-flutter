@@ -266,6 +266,48 @@ void main() {
       await controller.close();
     });
 
+    test('start timeout requires reconciliation before retry', () async {
+      final platform = _FakePlatform()
+        ..startError = const AsleepException(
+          AsleepErrorCode.nativeFailure,
+          'Native start timed out',
+          nativeCode: 'TRACKING_START_TIMEOUT',
+        );
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+
+      await controller.startTracking();
+
+      expect(controller.snapshot.trackingStatus, TrackingStatus.idle);
+      expect(controller.trackingRestorationRequired, isTrue);
+      expect(controller.canReconcileTracking, isTrue);
+      expect(controller.canStartTracking, isFalse);
+      expect(controller.operationMessage, 'Operation failed');
+      expect(platform.calls.where((call) => call == 'start').length, 1);
+
+      await controller.startTracking();
+      expect(platform.calls.where((call) => call == 'start').length, 1);
+      expect(controller.operationMessage, 'Operation failed');
+
+      platform.startError = null;
+      platform.restoreCompleter = Completer<RestoreResult>();
+      final reconciliation = controller.reconcileTrackingState();
+      expect(controller.canReconcileTracking, isFalse);
+      expect(controller.canStartTracking, isFalse);
+      platform.restoreCompleter!.complete(
+        const RestoreResult(hasActiveSession: false),
+      );
+      await reconciliation;
+
+      expect(controller.trackingRestorationRequired, isFalse);
+      expect(controller.canReconcileTracking, isFalse);
+      expect(controller.canStartTracking, isTrue);
+      expect(controller.operationMessage, 'Tracking stopped');
+      expect(controller.operationError, isNull);
+
+      await controller.close();
+    });
+
     test('Stop cancels a pending start and restores eligibility', () async {
       final platform = _FakePlatform()..startCompleter = Completer<void>();
       final controller = _controller(platform);
@@ -1693,6 +1735,7 @@ class _FakePlatform implements AsleepPlatform {
       <String, Completer<AsleepAverageReport>>{};
   Object? disposeError;
   Object? setupError;
+  Object? startError;
   Object? stopError;
   bool echoSetupKeyInError = false;
   String? setupApiKey;
@@ -1763,6 +1806,9 @@ class _FakePlatform implements AsleepPlatform {
   @override
   Future<void> startTracking(AsleepTrackingOptions options) async {
     calls.add('start');
+    if (startError case final error?) {
+      throw error;
+    }
     await startCompleter?.future;
   }
 
