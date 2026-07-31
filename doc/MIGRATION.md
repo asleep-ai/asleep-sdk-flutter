@@ -17,6 +17,7 @@ Flutter 0.1.0. It is not a promise of one-to-one naming compatibility.
 | `requestAnalysis()` | Same name plus `AnalysisRequest` | Immediate Android data is `immediateResult`; canonical results also arrive as `AnalysisResultEvent`. |
 | `getReportList(fromDate, toDate)` | Same name | Flutter pages both native report APIs until the first partial page and returns the complete aggregate list. |
 | `useAsleep().trackingStatus` | `AsleepSnapshot.trackingStatus` | `paused` and `recoveryRequired` still represent a live native session. |
+| `useAsleep().isODAEnabled` | `AsleepSnapshot.isOnDeviceAnalysisEnabled` | Reports the effective upload-analysis policy after successful initialization. A restored session configured by a new client defaults to non-ODA cadence. |
 | `addEventListener()` | `events.listen()` | Cancel the Dart subscription or dispose the client. |
 | `Asleep.subscribe()` | `states.listen()` | Read `state` first when the current value is needed; broadcast streams do not replay. |
 | `clearError()` | Same name | Clears only the projected Dart snapshot. |

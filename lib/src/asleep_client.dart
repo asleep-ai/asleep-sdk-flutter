@@ -44,7 +44,6 @@ class AsleepClient {
   AsleepSnapshot _state = const AsleepSnapshot();
   StreamSubscription<AsleepEvent>? _nativeEvents;
   bool _initialized = false;
-  bool _onDeviceAnalysisEnabled = false;
   bool _initializationInFlight = false;
   bool _restoreInFlight = false;
   bool _trackingStatusChecked = false;
@@ -102,17 +101,20 @@ class AsleepClient {
         );
       }
       await _platform.setup(options);
-      _onDeviceAnalysisEnabled = options.enableOnDeviceAnalysis;
       _initialized = true;
       _setState(
-        _state.copyWith(setupStatus: SetupStatus.complete, clearError: true),
+        _state.copyWith(
+          setupStatus: SetupStatus.complete,
+          isOnDeviceAnalysisEnabled: options.enableOnDeviceAnalysis,
+          clearError: true,
+        ),
       );
     } catch (error) {
       _initialized = false;
-      _onDeviceAnalysisEnabled = false;
       _setState(
         _state.copyWith(
           setupStatus: SetupStatus.idle,
+          isOnDeviceAnalysisEnabled: false,
           error: _errorAfterFailure(errorBefore, error),
         ),
       );
@@ -160,6 +162,7 @@ class AsleepClient {
       _setState(
         _state.copyWith(
           setupStatus: SetupStatus.idle,
+          isOnDeviceAnalysisEnabled: false,
           error: _errorAfterFailure(errorBefore, error),
         ),
       );
@@ -457,10 +460,29 @@ class AsleepClient {
   }
 
   /// Releases native resources and closes the client's streams.
-  Future<void> dispose() => _disposeFuture ??= _dispose();
+  Future<void> dispose() {
+    final activeDispose = _disposeFuture;
+    if (activeDispose != null) {
+      return activeDispose;
+    }
+
+    final completer = Completer<void>();
+    _disposeFuture = completer.future;
+    unawaited(
+      _dispose().then<void>(
+        (_) => completer.complete(),
+        onError: (Object error, StackTrace stackTrace) {
+          completer.completeError(error, stackTrace);
+        },
+      ),
+    );
+    return completer.future;
+  }
 
   Future<void> _dispose() async {
+    final disposedState = _state.copyWith(isOnDeviceAnalysisEnabled: false);
     _disposed = true;
+    _replaceState(disposedState);
     Object? firstError;
     StackTrace? firstStackTrace;
 
@@ -533,7 +555,7 @@ class AsleepClient {
         }
         if (_state.trackingStatus == TrackingStatus.tracking &&
             !_stopPending &&
-            (_onDeviceAnalysisEnabled ||
+            (_state.isOnDeviceAnalysisEnabled ||
                 (event.sequence >= 10 && event.sequence % 10 == 1))) {
           unawaited(_requestAnalysisFromUpload());
         }
@@ -620,7 +642,11 @@ class AsleepClient {
       case SetupFailedEvent():
         _initialized = false;
         _setState(
-          _state.copyWith(setupStatus: SetupStatus.idle, error: event.error),
+          _state.copyWith(
+            setupStatus: SetupStatus.idle,
+            isOnDeviceAnalysisEnabled: false,
+            error: event.error,
+          ),
         );
       case SetupProgressEvent():
         _setState(_state.copyWith(setupStatus: SetupStatus.inProgress));
@@ -639,6 +665,10 @@ class AsleepClient {
     if (_disposed) {
       return;
     }
+    _replaceState(value);
+  }
+
+  void _replaceState(AsleepSnapshot value) {
     if (_sameSnapshot(_state, value)) {
       return;
     }
@@ -653,6 +683,7 @@ class AsleepClient {
       left.sessionId == right.sessionId &&
       identical(left.analysisResult, right.analysisResult) &&
       left.isAnalyzing == right.isAnalyzing &&
+      left.isOnDeviceAnalysisEnabled == right.isOnDeviceAnalysisEnabled &&
       identical(left.error, right.error) &&
       left.didClose == right.didClose &&
       left.batteryOptimizationChecked == right.batteryOptimizationChecked;

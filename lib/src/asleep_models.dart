@@ -601,6 +601,7 @@ class AsleepSnapshot {
     this.sessionId,
     this.analysisResult,
     this.isAnalyzing = false,
+    this.isOnDeviceAnalysisEnabled = false,
     this.error,
     this.didClose = false,
     this.batteryOptimizationChecked = false,
@@ -612,6 +613,13 @@ class AsleepSnapshot {
   final String? sessionId;
   final AsleepAnalysisResult? analysisResult;
   final bool isAnalyzing;
+
+  /// Whether the client uses on-device analysis cadence for tracking uploads.
+  ///
+  /// This becomes `true` only after [AsleepClient.initialize] successfully
+  /// applies setup options that enable on-device analysis.
+  final bool isOnDeviceAnalysisEnabled;
+
   final AsleepError? error;
   final bool didClose;
   final bool batteryOptimizationChecked;
@@ -629,6 +637,7 @@ class AsleepSnapshot {
     AsleepAnalysisResult? analysisResult,
     bool clearAnalysisResult = false,
     bool? isAnalyzing,
+    bool? isOnDeviceAnalysisEnabled,
     AsleepError? error,
     bool clearError = false,
     bool? didClose,
@@ -643,6 +652,8 @@ class AsleepSnapshot {
           ? null
           : analysisResult ?? this.analysisResult,
       isAnalyzing: isAnalyzing ?? this.isAnalyzing,
+      isOnDeviceAnalysisEnabled:
+          isOnDeviceAnalysisEnabled ?? this.isOnDeviceAnalysisEnabled,
       error: clearError ? null : error ?? this.error,
       didClose: didClose ?? this.didClose,
       batteryOptimizationChecked:
