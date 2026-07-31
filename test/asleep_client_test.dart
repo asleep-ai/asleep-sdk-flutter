@@ -1340,6 +1340,45 @@ void main() {
       await stateSubscription.cancel();
     });
 
+    test(
+      'commands after disposal do not replace the terminal snapshot',
+      () async {
+        await client.initialize(
+          const AsleepSetupOptions(apiKey: 'test-api-key'),
+        );
+        await client.dispose();
+        final terminalState = client.state;
+
+        final exception = await captureAsleepException(
+          client.hasRequiredPermissions(),
+        );
+
+        expect(exception.error?.code, AsleepErrorCode.disposed.name);
+        expect(client.state, same(terminalState));
+      },
+    );
+
+    test(
+      'in-flight command failures do not replace the terminal snapshot',
+      () async {
+        await client.initialize(
+          const AsleepSetupOptions(apiKey: 'test-api-key'),
+        );
+        platform.permissionCompleter = Completer<bool>();
+        final permission = client.hasRequiredPermissions();
+        await client.dispose();
+        final terminalState = client.state;
+
+        platform.permissionCompleter!.completeError(
+          StateError('late permission failure'),
+        );
+        final exception = await captureAsleepException(permission);
+
+        expect(exception.error?.message, contains('late permission failure'));
+        expect(client.state, same(terminalState));
+      },
+    );
+
     test('clearError is a no-op from the terminal state listener', () async {
       Object? reentrantError;
       var observeTerminalState = false;

@@ -224,7 +224,10 @@ and included in the thrown exception. Call `clearError()` only when the
 application has acknowledged the current error. If native cleanup fails during
 `dispose()`, the final snapshot and thrown exception still share the cleanup
 error before the state stream closes. `clearError()` is an idempotent no-op
-after disposal because the state stream is already closed.
+after disposal because the state stream is already closed. That terminal
+snapshot remains immutable: commands called after disposal, and commands that
+finish after disposal, still throw structured exceptions without replacing
+the final state.
 
 Use semantic `AsleepError.code` before numeric fallback. The same numeric value
 can have different historical meanings across platforms. On iOS,

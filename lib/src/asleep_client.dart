@@ -458,6 +458,10 @@ class AsleepClient {
   }
 
   /// Releases native resources and closes the client's streams.
+  ///
+  /// The terminal [state] remains immutable after disposal. Commands called
+  /// afterward, or commands that finish after disposal, still throw structured
+  /// exceptions without replacing that terminal snapshot.
   Future<void> dispose() {
     final activeDispose = _disposeFuture;
     if (activeDispose != null) {
@@ -837,9 +841,7 @@ class AsleepClient {
         eventErrorRevisionBefore,
         error,
       );
-      if (_disposed) {
-        _state = _state.copyWith(error: structuredError);
-      } else if (!identical(_state.error, structuredError)) {
+      if (!_disposed && !identical(_state.error, structuredError)) {
         _setState(_state.copyWith(error: structuredError));
       }
       Error.throwWithStackTrace(
