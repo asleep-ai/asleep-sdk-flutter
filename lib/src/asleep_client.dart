@@ -876,11 +876,8 @@ class AsleepClient {
     return AsleepException(
       source is AsleepException ? source.code : AsleepErrorCode.nativeFailure,
       structuredError.message,
-      nativeCode:
-          source is AsleepException &&
-              source.nativeCode == null &&
-              structuredError.code == source.code.name
-          ? null
+      nativeCode: source is AsleepException
+          ? source.nativeCode
           : structuredError.code,
       nativeDetails: structuredError.platformDetails,
       cause: source is AsleepException ? source.cause ?? source : source,
@@ -951,7 +948,8 @@ class AsleepClient {
     int eventErrorRevisionBefore,
     Object commandError,
   ) {
-    if (_eventErrorRevision != eventErrorRevisionBefore) {
+    if (_eventErrorRevision != eventErrorRevisionBefore &&
+        identical(_state.error, _latestEventError)) {
       return _latestEventError!;
     }
     return _asleepError(commandError);

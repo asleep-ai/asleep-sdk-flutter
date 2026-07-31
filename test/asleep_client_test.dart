@@ -1070,6 +1070,7 @@ void main() {
       );
 
       expect(exception.error, same(client.state.error));
+      expect(exception.nativeCode, 'ASLEEP_SDK_ERROR');
       expect(exception.error?.code, 'NETWORK_OFFLINE');
       expect(exception.error?.category, AsleepErrorCategory.transient);
       expect(exception.error?.numericCode, 23000);
@@ -1118,6 +1119,53 @@ void main() {
       expect(permissionException.error, same(client.state.error));
       expect(permissionException.error, isNot(same(loggingException.error)));
     });
+
+    test(
+      'cleared event errors are not resurrected by command failures',
+      () async {
+        await client.initialize(
+          const AsleepSetupOptions(apiKey: 'test-api-key'),
+        );
+        final eventError = AsleepError(
+          code: 'NETWORK_OFFLINE',
+          message: 'The native event failed.',
+          category: AsleepErrorCategory.transient,
+        );
+
+        platform.permissionCompleter = Completer<bool>();
+        var permission = client.hasRequiredPermissions();
+        platform.emit(TrackingFailedEvent(error: eventError));
+        client.clearError();
+        platform.permissionCompleter!.completeError(
+          StateError('permission failed after clear'),
+        );
+
+        var exception = await captureAsleepException(permission);
+        expect(
+          exception.error?.message,
+          contains('permission failed after clear'),
+        );
+        expect(exception.error, same(client.state.error));
+        expect(exception.error, isNot(same(eventError)));
+
+        client.clearError();
+        platform.permissionCompleter = Completer<bool>();
+        permission = client.hasRequiredPermissions();
+        platform.emit(TrackingFailedEvent(error: eventError));
+        platform.emit(const UserJoinedEvent(userId: 'user-1'));
+        platform.permissionCompleter!.completeError(
+          StateError('permission failed after success event'),
+        );
+
+        exception = await captureAsleepException(permission);
+        expect(
+          exception.error?.message,
+          contains('permission failed after success event'),
+        );
+        expect(exception.error, same(client.state.error));
+        expect(exception.error, isNot(same(eventError)));
+      },
+    );
 
     test(
       'auxiliary command failures share one structured error instance',
