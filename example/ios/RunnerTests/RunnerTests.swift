@@ -34,6 +34,24 @@ class RunnerTests: XCTestCase {
     )
   }
 
+  func testAttemptDelegateStorePreservesAcceptedDelegateAfterAnotherFailure() {
+    var store = AttemptDelegateStore<NSObject>()
+    let acceptedDelegate = NSObject()
+    let replacementDelegate = NSObject()
+    store.store(acceptedDelegate, for: 1)
+    store.accept(1)
+
+    store.discardIfUnaccepted(2)
+    XCTAssertTrue(store.delegate(for: 1) === acceptedDelegate)
+    XCTAssertEqual(store.acceptedAttemptID, 1)
+
+    store.store(replacementDelegate, for: 3)
+    store.discardIfUnaccepted(3)
+    XCTAssertTrue(store.delegate(for: 1) === acceptedDelegate)
+    XCTAssertNil(store.delegate(for: 3))
+    XCTAssertEqual(store.acceptedAttemptID, 1)
+  }
+
   func testTrackingFailuresClassifyOnlyDefinitiveTerminationPaths() {
     XCTAssertTrue(
       trackingFailureTerminatesSession(

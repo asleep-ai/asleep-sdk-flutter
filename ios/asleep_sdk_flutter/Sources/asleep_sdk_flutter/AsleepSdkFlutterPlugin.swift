@@ -108,6 +108,40 @@ private enum NativeSdkOwnerRegistry {
   }
 }
 
+struct AttemptDelegateStore<Delegate: AnyObject> {
+  private var delegates: [UInt64: Delegate] = [:]
+  private(set) var acceptedAttemptID: UInt64?
+
+  mutating func store(_ delegate: Delegate, for attemptID: UInt64) {
+    delegates[attemptID] = delegate
+  }
+
+  func delegate(for attemptID: UInt64) -> Delegate? {
+    delegates[attemptID]
+  }
+
+  mutating func accept(_ attemptID: UInt64) {
+    if let acceptedAttemptID, acceptedAttemptID != attemptID {
+      delegates.removeValue(forKey: acceptedAttemptID)
+    }
+    acceptedAttemptID = attemptID
+  }
+
+  mutating func discardIfUnaccepted(_ attemptID: UInt64) {
+    guard acceptedAttemptID != attemptID else { return }
+    delegates.removeValue(forKey: attemptID)
+  }
+
+  mutating func retainOnly(_ attemptID: UInt64?) {
+    let retained = attemptID.flatMap { delegates[$0] }
+    delegates.removeAll()
+    if let attemptID, let retained {
+      delegates[attemptID] = retained
+    }
+    acceptedAttemptID = nil
+  }
+}
+
 struct TrackingStartRecoveryGate {
   private(set) var isRecoveryRequired = false
 
@@ -288,8 +322,7 @@ final class IosAsleepHostApi: NSObject, AsleepHostApi {
   private var config: Asleep.Config?
   private var setupContext: SetupContext?
   private var setupDelegate: SetupAttemptDelegate?
-  private var configDelegate: ConfigAttemptDelegate?
-  private var acceptedConfigAttemptID: UInt64?
+  private var configDelegates = AttemptDelegateStore<ConfigAttemptDelegate>()
   private var activeInitializationToken: NativeInitializationToken?
   private var drainingInitialization:
     (
@@ -432,7 +465,7 @@ final class IosAsleepHostApi: NSObject, AsleepHostApi {
       attemptID: attemptID,
       token: token
     )
-    configDelegate = delegate
+    configDelegates.store(delegate, for: attemptID)
     nativeSdk.configure(
       message.apiKey,
       message.userId,
@@ -704,11 +737,18 @@ final class IosAsleepHostApi: NSObject, AsleepHostApi {
     initializationCoordinator.detach(error: BridgeError.engineDetached)
     setupContext = nil
     activeInitializationToken = nil
-    if drainingInitialization == nil {
+    if let drainingInitialization {
+      if drainingInitialization.phase != .setup {
+        setupDelegate = nil
+      }
+      configDelegates.retainOnly(
+        drainingInitialization.phase == .configuration
+          ? drainingInitialization.attemptID : nil
+      )
+    } else {
       setupDelegate = nil
-      configDelegate = nil
+      configDelegates.retainOnly(nil)
     }
-    acceptedConfigAttemptID = nil
     finishTrackingStart(.failure(BridgeError.engineDetached))
     trackingStartRecoveryGate.didTerminate()
     trackingManager = nil
@@ -764,9 +804,7 @@ final class IosAsleepHostApi: NSObject, AsleepHostApi {
     activeInitializationToken = nil
     if drainingInitialization?.attemptID != attemptID {
       setupDelegate = nil
-      if acceptedConfigAttemptID != attemptID {
-        configDelegate = nil
-      }
+      configDelegates.discardIfUnaccepted(attemptID)
     }
     initializationInFlight = false
     releaseNativeSdkIfIdle()
@@ -787,9 +825,7 @@ final class IosAsleepHostApi: NSObject, AsleepHostApi {
     }
     drainingInitialization = nil
     setupDelegate = nil
-    if acceptedConfigAttemptID != attemptID {
-      configDelegate = nil
-    }
+    configDelegates.discardIfUnaccepted(attemptID)
     NativeSdkOwnerRegistry.settleInitialization(self, token: token, phase: phase)
   }
 
@@ -948,7 +984,7 @@ extension IosAsleepHostApi {
       attemptID: attemptID,
       token: token
     )
-    configDelegate = delegate
+    configDelegates.store(delegate, for: attemptID)
     nativeSdk.configure(
       context.message.apiKey,
       nil,
@@ -1016,7 +1052,7 @@ extension IosAsleepHostApi {
     self.config = config
     trackingManager = Asleep.createSleepTrackingManager(config: config, delegate: self)
     reportManager = Asleep.createReports(config: config)
-    acceptedConfigAttemptID = attemptID
+    configDelegates.accept(attemptID)
     emit("onUserJoined", ["userId": userId])
     if setupContext?.attemptID == attemptID {
       emit("onSetupDidComplete")
@@ -1052,7 +1088,12 @@ extension IosAsleepHostApi {
   }
 
   func userDidDelete(attemptID: UInt64, userId: String) {
-    guard !detached, acceptedConfigAttemptID == attemptID else { return }
+    guard
+      !detached,
+      configDelegates.acceptedAttemptID == attemptID
+    else {
+      return
+    }
     emit("onUserDeleted", ["userId": userId])
   }
 }
