@@ -1311,6 +1311,227 @@ void main() {
       },
     );
 
+    test(
+      'initialize clears its starting error in the completion snapshot',
+      () async {
+        platform.loggingError = StateError('old failure');
+        await captureAsleepException(client.setLoggingEnabled(true));
+        final oldError = client.state.error;
+        final states = <AsleepSnapshot>[];
+        final subscription = client.states.listen(states.add);
+
+        platform.loggingError = null;
+        await client.initialize(
+          const AsleepSetupOptions(apiKey: 'test-api-key'),
+        );
+
+        expect(oldError, isNotNull);
+        expect(client.state.setupStatus, SetupStatus.complete);
+        expect(client.state.error, isNull);
+        expect(
+          states.where(
+            (state) =>
+                state.setupStatus == SetupStatus.complete &&
+                identical(state.error, oldError),
+          ),
+          isEmpty,
+        );
+        await subscription.cancel();
+      },
+    );
+
+    test(
+      'configure clears its starting error in the completion snapshot',
+      () async {
+        await client.initialize(
+          const AsleepSetupOptions(apiKey: 'test-api-key'),
+        );
+        platform.loggingError = StateError('old failure');
+        await captureAsleepException(client.setLoggingEnabled(true));
+        final oldError = client.state.error;
+        final states = <AsleepSnapshot>[];
+        final subscription = client.states.listen(states.add);
+
+        platform.loggingError = null;
+        await client.configure(
+          const AsleepConfiguration(apiKey: 'test-api-key'),
+        );
+
+        expect(oldError, isNotNull);
+        expect(client.state.setupStatus, SetupStatus.complete);
+        expect(client.state.error, isNull);
+        expect(
+          states.where(
+            (state) =>
+                state.setupStatus == SetupStatus.complete &&
+                identical(state.error, oldError),
+          ),
+          isEmpty,
+        );
+        await subscription.cancel();
+      },
+    );
+
+    test('start clears its starting error in the tracking snapshot', () async {
+      await prepareClient(client);
+      platform.loggingError = StateError('old failure');
+      await captureAsleepException(client.setLoggingEnabled(true));
+      final oldError = client.state.error;
+      final states = <AsleepSnapshot>[];
+      final subscription = client.states.listen(states.add);
+
+      platform.loggingError = null;
+      await client.startTracking();
+
+      expect(oldError, isNotNull);
+      expect(client.state.trackingStatus, TrackingStatus.tracking);
+      expect(client.state.error, isNull);
+      expect(
+        states.where(
+          (state) =>
+              state.trackingStatus == TrackingStatus.tracking &&
+              identical(state.error, oldError),
+        ),
+        isEmpty,
+      );
+      await subscription.cancel();
+    });
+
+    test(
+      'restore clears its starting error in the tracking snapshot',
+      () async {
+        platform.loggingError = StateError('old failure');
+        await captureAsleepException(client.setLoggingEnabled(true));
+        final oldError = client.state.error;
+        final states = <AsleepSnapshot>[];
+        final subscription = client.states.listen(states.add);
+
+        platform.loggingError = null;
+        platform.hasActiveSession = true;
+        await client.checkAndRestoreTracking();
+
+        expect(oldError, isNotNull);
+        expect(client.state.trackingStatus, TrackingStatus.tracking);
+        expect(client.state.error, isNull);
+        expect(
+          states.where(
+            (state) =>
+                state.trackingStatus == TrackingStatus.tracking &&
+                identical(state.error, oldError),
+          ),
+          isEmpty,
+        );
+        await subscription.cancel();
+      },
+    );
+
+    test(
+      'battery check clears its starting error in the checked snapshot',
+      () async {
+        await client.initialize(
+          const AsleepSetupOptions(apiKey: 'test-api-key'),
+        );
+        platform.loggingError = StateError('old failure');
+        await captureAsleepException(client.setLoggingEnabled(true));
+        final oldError = client.state.error;
+        final states = <AsleepSnapshot>[];
+        final subscription = client.states.listen(states.add);
+
+        platform.loggingError = null;
+        await client.checkBatteryOptimization();
+
+        expect(oldError, isNotNull);
+        expect(client.state.batteryOptimizationChecked, isTrue);
+        expect(client.state.error, isNull);
+        expect(
+          states.where(
+            (state) =>
+                state.batteryOptimizationChecked &&
+                identical(state.error, oldError),
+          ),
+          isEmpty,
+        );
+        await subscription.cancel();
+      },
+    );
+
+    test('restore completion preserves a concurrent event error', () async {
+      platform.loggingError = StateError('old failure');
+      await captureAsleepException(client.setLoggingEnabled(true));
+      platform.loggingError = null;
+      platform.restoreCompleter = Completer<RestoreResult>();
+      final states = <AsleepSnapshot>[];
+      final subscription = client.states.listen(states.add);
+
+      final restore = client.checkAndRestoreTracking();
+      await pumpEventQueue();
+      final eventError = AsleepError(
+        code: 'NETWORK_OFFLINE',
+        message: 'The native event failed.',
+        category: AsleepErrorCategory.transient,
+      );
+      platform.emit(TrackingFailedEvent(error: eventError));
+      platform.restoreCompleter!.complete(
+        const RestoreResult(hasActiveSession: true),
+      );
+      await restore;
+
+      expect(client.state.trackingStatus, TrackingStatus.tracking);
+      expect(client.state.error, same(eventError));
+      expect(
+        states,
+        contains(
+          isA<AsleepSnapshot>()
+              .having(
+                (state) => state.trackingStatus,
+                'trackingStatus',
+                TrackingStatus.tracking,
+              )
+              .having((state) => state.error, 'error', same(eventError)),
+        ),
+      );
+      await subscription.cancel();
+    });
+
+    test('configure completion preserves a concurrent event error', () async {
+      await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
+      platform.loggingError = StateError('old failure');
+      await captureAsleepException(client.setLoggingEnabled(true));
+      platform.loggingError = null;
+      platform.configureCompleter = Completer<void>();
+      final states = <AsleepSnapshot>[];
+      final subscription = client.states.listen(states.add);
+
+      final configuration = client.configure(
+        const AsleepConfiguration(apiKey: 'test-api-key'),
+      );
+      await pumpEventQueue();
+      final eventError = AsleepError(
+        code: 'NETWORK_OFFLINE',
+        message: 'The native event failed.',
+        category: AsleepErrorCategory.transient,
+      );
+      platform.emit(TrackingFailedEvent(error: eventError));
+      platform.configureCompleter!.complete();
+      await configuration;
+
+      expect(client.state.setupStatus, SetupStatus.complete);
+      expect(client.state.error, same(eventError));
+      expect(
+        states,
+        contains(
+          isA<AsleepSnapshot>()
+              .having(
+                (state) => state.setupStatus,
+                'setupStatus',
+                SetupStatus.complete,
+              )
+              .having((state) => state.error, 'error', same(eventError)),
+        ),
+      );
+      await subscription.cancel();
+    });
+
     test('dispose detaches native events and closes streams', () async {
       var eventCount = 0;
       var stateDone = false;

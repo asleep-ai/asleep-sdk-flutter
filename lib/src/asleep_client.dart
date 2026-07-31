@@ -70,60 +70,61 @@ class AsleepClient {
   Stream<AsleepEvent> get events => _events.stream;
 
   /// Sets up the native SDK with the supplied API and service options.
-  Future<void> initialize(AsleepSetupOptions options) => _runCommand(() async {
-    _ensureOpen();
-    _ensureInitializationAvailable();
-    if (_state.isTracking ||
-        _recordingDeadSession ||
-        _hasPendingLifecycleCommand) {
-      throw const AsleepException(
-        AsleepErrorCode.invalidState,
-        'Cannot initialize while a tracking session is active.',
-      );
-    }
-    _validateRequiredString(options.apiKey, 'apiKey');
-    _validateOptionalUrl(options.baseUrl, 'baseUrl');
-    _validateOptionalUrl(options.callbackUrl, 'callbackUrl');
-    _validateOptionalNonEmptyString(options.service, 'service');
-    _initializationInFlight = true;
-    _initialized = false;
-    _attachEvents();
-    _setState(_state.copyWith(setupStatus: SetupStatus.inProgress));
-    try {
-      await _restorePreflight();
-      if (_state.isTracking) {
-        _preflightConfigureAllowed = true;
-        throw const AsleepException(
-          AsleepErrorCode.invalidState,
-          'Cannot initialize while a tracking session is active. '
-          'Call configure() to reconnect it or stopTracking() first.',
-        );
-      }
-      await _platform.setup(options);
-      _initialized = true;
-      _setState(
-        _state.copyWith(
-          setupStatus: SetupStatus.complete,
-          isOnDeviceAnalysisEnabled: options.enableOnDeviceAnalysis,
-        ),
-      );
-    } catch (_) {
-      _initialized = false;
-      _setState(
-        _state.copyWith(
-          setupStatus: SetupStatus.idle,
-          isOnDeviceAnalysisEnabled: false,
-        ),
-      );
-      rethrow;
-    } finally {
-      _initializationInFlight = false;
-    }
-  });
+  Future<void> initialize(AsleepSetupOptions options) =>
+      _runStateCommand((setSuccessState) async {
+        _ensureOpen();
+        _ensureInitializationAvailable();
+        if (_state.isTracking ||
+            _recordingDeadSession ||
+            _hasPendingLifecycleCommand) {
+          throw const AsleepException(
+            AsleepErrorCode.invalidState,
+            'Cannot initialize while a tracking session is active.',
+          );
+        }
+        _validateRequiredString(options.apiKey, 'apiKey');
+        _validateOptionalUrl(options.baseUrl, 'baseUrl');
+        _validateOptionalUrl(options.callbackUrl, 'callbackUrl');
+        _validateOptionalNonEmptyString(options.service, 'service');
+        _initializationInFlight = true;
+        _initialized = false;
+        _attachEvents();
+        _setState(_state.copyWith(setupStatus: SetupStatus.inProgress));
+        try {
+          await _restorePreflight();
+          if (_state.isTracking) {
+            _preflightConfigureAllowed = true;
+            throw const AsleepException(
+              AsleepErrorCode.invalidState,
+              'Cannot initialize while a tracking session is active. '
+              'Call configure() to reconnect it or stopTracking() first.',
+            );
+          }
+          await _platform.setup(options);
+          _initialized = true;
+          setSuccessState(
+            _state.copyWith(
+              setupStatus: SetupStatus.complete,
+              isOnDeviceAnalysisEnabled: options.enableOnDeviceAnalysis,
+            ),
+          );
+        } catch (_) {
+          _initialized = false;
+          _setState(
+            _state.copyWith(
+              setupStatus: SetupStatus.idle,
+              isOnDeviceAnalysisEnabled: false,
+            ),
+          );
+          rethrow;
+        } finally {
+          _initializationInFlight = false;
+        }
+      });
 
   /// Applies credentials and endpoints without running the setup flow.
   Future<void> configure(AsleepConfiguration configuration) =>
-      _runCommand(() async {
+      _runStateCommand((setSuccessState) async {
         _ensureOpen();
         _ensureInitializationAvailable();
         if ((_state.isTracking && !_preflightConfigureAllowed) ||
@@ -147,7 +148,7 @@ class AsleepClient {
           await _restorePreflight();
           await _platform.configure(configuration);
           _initialized = true;
-          _setState(_state.copyWith(setupStatus: SetupStatus.complete));
+          setSuccessState(_state.copyWith(setupStatus: SetupStatus.complete));
         } catch (_) {
           _initialized = false;
           _preflightConfigureAllowed =
@@ -165,7 +166,9 @@ class AsleepClient {
       });
 
   /// Checks for a native tracking session that can be restored.
-  Future<RestoreResult> checkAndRestoreTracking() => _runCommand(() async {
+  Future<RestoreResult> checkAndRestoreTracking() => _runStateCommand((
+    setSuccessState,
+  ) async {
     _ensureOpen();
     if (_restoreInFlight ||
         _initializationInFlight ||
@@ -186,7 +189,7 @@ class AsleepClient {
       _trackingStatusChecked = true;
       if (result.hasActiveSession) {
         _recordingDeadSession = false;
-        _setState(
+        setSuccessState(
           _state.copyWith(
             trackingStatus: TrackingStatus.tracking,
             didClose: false,
@@ -194,7 +197,7 @@ class AsleepClient {
         );
       } else if (stalePreflight &&
           _state.trackingStatus == TrackingStatus.tracking) {
-        _setState(
+        setSuccessState(
           _state.copyWith(
             trackingStatus: TrackingStatus.idle,
             clearSessionId: true,
@@ -209,10 +212,10 @@ class AsleepClient {
 
   /// Returns the Android battery-optimization status.
   Future<BatteryOptimizationStatus> checkBatteryOptimization() =>
-      _runCommand(() async {
+      _runStateCommand((setSuccessState) async {
         _ensureReady();
         final status = await _platform.checkBatteryOptimization();
-        _setState(_state.copyWith(batteryOptimizationChecked: true));
+        setSuccessState(_state.copyWith(batteryOptimizationChecked: true));
         return status;
       });
 
@@ -237,7 +240,7 @@ class AsleepClient {
   /// Starts a new tracking session with optional platform-specific settings.
   Future<void> startTracking([
     AsleepTrackingOptions options = const AsleepTrackingOptions(),
-  ]) => _runCommand(() async {
+  ]) => _runStateCommand((setSuccessState) async {
     _ensureReady();
     if (!_trackingStatusChecked) {
       throw const AsleepException(
@@ -294,7 +297,7 @@ class AsleepClient {
       _activeStartAttempt = null;
       _startPending = false;
       if (_state.trackingStatus == TrackingStatus.idle) {
-        _setState(
+        setSuccessState(
           _state.copyWith(
             trackingStatus: TrackingStatus.tracking,
             didClose: false,
@@ -850,6 +853,26 @@ class AsleepClient {
         stackTrace,
       );
     }
+  }
+
+  Future<T> _runStateCommand<T>(
+    FutureOr<T> Function(void Function(AsleepSnapshot) setSuccessState) action,
+  ) {
+    final errorBefore = _state.error;
+    final eventErrorRevisionBefore = _eventErrorRevision;
+    return _runCommand(
+      () => action((value) {
+        if (!_disposed &&
+            _eventErrorRevision == eventErrorRevisionBefore &&
+            errorBefore != null &&
+            identical(_state.error, errorBefore) &&
+            identical(value.error, errorBefore)) {
+          _setState(value.copyWith(clearError: true));
+        } else {
+          _setState(value);
+        }
+      }),
+    );
   }
 
   void _clearErrorIfUnchanged(
