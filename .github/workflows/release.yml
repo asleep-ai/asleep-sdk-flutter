@@ -488,6 +488,45 @@ jobs:
           --expected-android-native-version "$ANDROID_NATIVE_VERSION"
           --expected-ios-native-version "$IOS_NATIVE_VERSION"
 
+  release-notes:
+    name: Generate release notes
+    needs:
+      - minimum-toolchain
+      - validate
+      - android
+      - ios
+      - device-qualification
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Generate release notes
+        id: notes
+        uses: asleep-ai/actions/release-notes@release-notes/v1
+        with:
+          current-tag: ${{ github.ref_name }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          output-file: release-notes.md
+
+      - name: Preview release notes
+        run: cat "${{ steps.notes.outputs.path }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-notes-${{ github.ref_name }}
+          path: ${{ steps.notes.outputs.path }}
+          if-no-files-found: error
+          retention-days: 7
+
   publish:
     name: Publish to pub.dev
     needs:
@@ -496,6 +535,7 @@ jobs:
       - android
       - ios
       - device-qualification
+      - release-notes
     if: >-
       github.event_name == 'push' &&
       vars.PUBDEV_PUBLISH_ENABLED == 'true'
@@ -523,6 +563,7 @@ jobs:
       - android
       - ios
       - device-qualification
+      - release-notes
       - publish
       - hosted-consumer
     if: >-
@@ -533,6 +574,7 @@ jobs:
       needs.android.result == 'success' &&
       needs.ios.result == 'success' &&
       needs.device-qualification.result == 'success' &&
+      needs.release-notes.result == 'success' &&
       (
         (
           needs.publish.result == 'success' &&
@@ -545,8 +587,21 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Download release notes
+        uses: actions/download-artifact@v8
+        with:
+          name: release-notes-${{ github.ref_name }}
+          path: .
+
       - name: Create release with generated notes
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+          NOTES_PATH: release-notes.md
+        run: |
+          # Keep GitHub-generated notes as a completeness backstop for
+          # https://github.com/asleep-ai/actions/issues/11.
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --notes "$(cat "$NOTES_PATH")" \
+            --generate-notes
