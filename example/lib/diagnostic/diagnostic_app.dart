@@ -152,11 +152,15 @@ class _DiagnosticPageState extends State<DiagnosticPage>
               _ButtonWrap(
                 children: <Widget>[
                   OutlinedButton(
-                    onPressed: () => unawaited(controller.checkPermissions()),
+                    onPressed: controller.canManagePermissions
+                        ? () => unawaited(controller.checkPermissions())
+                        : null,
                     child: const Text('Check permissions'),
                   ),
                   OutlinedButton(
-                    onPressed: () => unawaited(controller.requestPermissions()),
+                    onPressed: controller.canManagePermissions
+                        ? () => unawaited(controller.requestPermissions())
+                        : null,
                     child: const Text('Request permissions'),
                   ),
                   OutlinedButton(

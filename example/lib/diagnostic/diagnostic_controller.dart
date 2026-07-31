@@ -97,6 +97,7 @@ class DiagnosticController extends ChangeNotifier {
   Completer<void>? _operationsDrained;
   Future<void>? _closeFuture;
   Future<void>? _analysisRequestFuture;
+  Future<bool?>? _permissionOperationFuture;
   Future<void> _loggingTransition = Future<void>.value();
 
   AsleepSnapshot get snapshot => _snapshot;
@@ -115,6 +116,8 @@ class DiagnosticController extends ChangeNotifier {
   bool get sdkPrepared => _sdkPrepared;
   bool get sdkPreparationInFlight => _sdkPreparationInFlight;
   bool get analysisRequestInFlight => _analysisRequestInFlight;
+  bool get canManagePermissions =>
+      _permissionOperationFuture == null && !_closed;
   bool get recoveryAwaitingUpload => _recoveryAwaitingUpload;
   bool get trackingRestorationRequired => _trackingRestorationRequired;
   bool get stopAwaitingEndEvent => _stopAwaitingEndEvent;
@@ -232,22 +235,50 @@ class DiagnosticController extends ChangeNotifier {
     }
   }
 
-  Future<bool?> checkPermissions() async {
-    bool? result;
-    await _run('Permission status checked', () async {
-      result = await _client.hasRequiredPermissions();
-      _permissionsGranted = result;
-    });
-    return result;
+  Future<bool?> checkPermissions() => _runPermissionOperation(
+    'Permission status checked',
+    _client.hasRequiredPermissions,
+  );
+
+  Future<bool?> requestPermissions() => _runPermissionOperation(
+    'Permission request complete',
+    _client.requestRequiredPermissions,
+  );
+
+  Future<bool?> _runPermissionOperation(
+    String successMessage,
+    Future<bool> Function() action,
+  ) {
+    final activeOperation = _permissionOperationFuture;
+    if (activeOperation != null) {
+      return activeOperation;
+    }
+    if (_closed) {
+      return Future<bool?>.value();
+    }
+    final completion = Completer<bool?>();
+    _permissionOperationFuture = completion.future;
+    _notify();
+    unawaited(_completePermissionOperation(completion, successMessage, action));
+    return completion.future;
   }
 
-  Future<bool?> requestPermissions() async {
+  Future<void> _completePermissionOperation(
+    Completer<bool?> completion,
+    String successMessage,
+    Future<bool> Function() action,
+  ) async {
     bool? result;
-    await _run('Permission request complete', () async {
-      result = await _client.requestRequiredPermissions();
-      _permissionsGranted = result;
-    });
-    return result;
+    try {
+      await _run(successMessage, () async {
+        result = await action();
+        _permissionsGranted = result;
+      });
+    } finally {
+      _permissionOperationFuture = null;
+      _notify();
+      completion.complete(result);
+    }
   }
 
   Future<void> recheckBatteryOptimization() async {

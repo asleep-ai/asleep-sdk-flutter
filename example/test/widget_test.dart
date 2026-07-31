@@ -146,6 +146,67 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('permission actions disable and coalesce while dialog is open', (
+    tester,
+  ) async {
+    _useTallSurface(tester);
+    final platform = _WidgetFakePlatform()
+      ..permissionRequestCompleter = Completer<bool>();
+    final controller = DiagnosticController(
+      client: AsleepClient(platform: platform),
+      hostPlatform: DiagnosticHostPlatform.android,
+    );
+    await tester.pumpWidget(AsleepExampleApp(controller: controller));
+
+    final request = tester.widget<OutlinedButton>(
+      find.widgetWithText(OutlinedButton, 'Request permissions'),
+    );
+    request.onPressed!();
+    request.onPressed!();
+    await tester.pump();
+
+    expect(platform.permissionRequestCount, 1);
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.widgetWithText(OutlinedButton, 'Check permissions'),
+          )
+          .onPressed,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.widgetWithText(OutlinedButton, 'Request permissions'),
+          )
+          .onPressed,
+      isNull,
+    );
+
+    platform.permissionRequestCompleter!.complete(true);
+    await tester.pump();
+
+    expect(controller.permissionsGranted, isTrue);
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.widgetWithText(OutlinedButton, 'Check permissions'),
+          )
+          .onPressed,
+      isNotNull,
+    );
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.widgetWithText(OutlinedButton, 'Request permissions'),
+          )
+          .onPressed,
+      isNotNull,
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('failed restored configure keeps Initialize enabled', (
     tester,
   ) async {
@@ -612,6 +673,7 @@ class _WidgetFakePlatform implements AsleepPlatform {
   List<AsleepSession> reportListResult = const <AsleepSession>[];
   Completer<void>? deleteCompleter;
   Completer<void>? startCompleter;
+  Completer<bool>? permissionRequestCompleter;
   Completer<RestoreResult>? restoreCompleter;
   Completer<BatteryOptimizationStatus>? batteryCheckCompleter;
   RestoreResult restoreResult = const RestoreResult(hasActiveSession: false);
@@ -622,6 +684,7 @@ class _WidgetFakePlatform implements AsleepPlatform {
   );
   bool permissionsGranted = true;
   bool permissionRequestResult = true;
+  int permissionRequestCount = 0;
 
   @override
   Stream<AsleepEvent> get events => _events.stream;
@@ -653,7 +716,10 @@ class _WidgetFakePlatform implements AsleepPlatform {
   Future<bool> hasRequiredPermissions() async => permissionsGranted;
 
   @override
-  Future<bool> requestRequiredPermissions() async => permissionRequestResult;
+  Future<bool> requestRequiredPermissions() async {
+    permissionRequestCount++;
+    return await permissionRequestCompleter?.future ?? permissionRequestResult;
+  }
 
   @override
   Future<void> startTracking(AsleepTrackingOptions options) async {

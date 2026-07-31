@@ -381,6 +381,54 @@ void main() {
     });
 
     test(
+      'permission actions share one in-flight request and allow failure retry',
+      () async {
+        final platform = _FakePlatform()
+          ..permissionRequestCompleter = Completer<bool>();
+        final controller = _controller(platform);
+
+        final first = controller.requestPermissions();
+        final duplicateRequest = controller.requestPermissions();
+        final duplicateCheck = controller.checkPermissions();
+        await Future<void>.delayed(Duration.zero);
+
+        expect(duplicateRequest, same(first));
+        expect(duplicateCheck, same(first));
+        expect(controller.canManagePermissions, isFalse);
+        expect(
+          platform.calls.where((call) => call == 'permissions-request').length,
+          1,
+        );
+        expect(
+          platform.calls.where((call) => call == 'permissions-check'),
+          isEmpty,
+        );
+
+        platform.permissionRequestCompleter!.completeError(
+          StateError('permission dialog failed'),
+        );
+
+        expect(await first, isNull);
+        expect(await duplicateRequest, isNull);
+        expect(await duplicateCheck, isNull);
+        expect(controller.canManagePermissions, isTrue);
+        expect(controller.operationMessage, 'Operation failed');
+
+        platform.permissionRequestCompleter = null;
+        expect(await controller.requestPermissions(), isTrue);
+        expect(controller.permissionsGranted, isTrue);
+        expect(controller.canManagePermissions, isTrue);
+        expect(
+          platform.calls.where((call) => call == 'permissions-request').length,
+          2,
+        );
+        expect(controller.operationMessage, 'Permission request complete');
+
+        await controller.close();
+      },
+    );
+
+    test(
       'Android Start requires an exemption and recheck updates eligibility',
       () async {
         final platform = _FakePlatform()
@@ -2353,6 +2401,7 @@ class _FakePlatform implements AsleepPlatform {
   Completer<void>? resumeCompleter;
   Completer<void>? startCompleter;
   Completer<void>? stopCompleter;
+  Completer<bool>? permissionRequestCompleter;
   Completer<RestoreResult>? restoreCompleter;
   Completer<BatteryOptimizationStatus>? batteryCheckCompleter;
   final List<Completer<BatteryOptimizationStatus>> batteryCheckQueue =
@@ -2450,7 +2499,7 @@ class _FakePlatform implements AsleepPlatform {
   @override
   Future<bool> requestRequiredPermissions() async {
     calls.add('permissions-request');
-    return permissionRequestResult;
+    return await permissionRequestCompleter?.future ?? permissionRequestResult;
   }
 
   @override
