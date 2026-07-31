@@ -212,8 +212,10 @@ final before = await client.checkBatteryOptimization();
 if (!before.exempted) {
   // Invoke from an explanatory, user-triggered button.
   await client.requestBatteryOptimizationExemption();
-  // Do not assume that opening Settings granted an exemption.
-  // Recheck when the user explicitly returns to this step.
+}
+
+// Invoke from a separate button or an app-resume flow after Settings closes.
+Future<void> recheckBatteryAfterSettingsReturn() async {
   final after = await client.checkBatteryOptimization();
   renderBatteryStatus(after);
 }
@@ -277,6 +279,17 @@ the application in "waiting for recovery proof" until a later
 
 ```dart
 void handleRecoveryEvent(AsleepEvent event) {
+  final newRecoveryEpoch =
+      event is TrackingInterruptedEvent ||
+      (event is TrackingFailedEvent &&
+          event.error.category == AsleepErrorCategory.recoveryRequired);
+  if (newRecoveryEpoch && awaitingRecoveryUpload) {
+    // A new pause epoch supersedes the upload expected by the prior resume.
+    // Release now; the next foreground callback will re-arm the latch.
+    awaitingRecoveryUpload = false;
+    return;
+  }
+
   if (event is TrackingUploadedEvent && awaitingRecoveryUpload) {
     awaitingRecoveryUpload = false;
     renderRecoveryComplete();
@@ -294,6 +307,11 @@ void handleRecoveryEvent(AsleepEvent event) {
   }
 }
 ```
+
+If another `TrackingInterruptedEvent` or recovery-required failure arrives
+while upload proof is pending, the session entered a new recovery epoch.
+Release the prior latch and let the next foreground callback issue one new
+resume and re-arm upload proof.
 
 ## Start, resume, stop, and analysis
 

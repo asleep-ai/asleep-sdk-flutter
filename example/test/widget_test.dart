@@ -211,6 +211,7 @@ void main() {
       client: AsleepClient(platform: platform),
       hostPlatform: DiagnosticHostPlatform.android,
     );
+    await controller.initializeOrRestore('runtime-secret');
     await tester.pumpWidget(AsleepExampleApp(controller: controller));
 
     expect(find.text('unchecked'), findsAtLeastNWidgets(1));
@@ -221,6 +222,10 @@ void main() {
     await tester.tap(find.text('Request permissions'));
     await tester.pumpAndSettle();
     expect(find.text('granted'), findsOneWidget);
+
+    platform.emit(const MicrophonePermissionDeniedEvent());
+    await tester.pump();
+    expect(find.text('denied'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
   });

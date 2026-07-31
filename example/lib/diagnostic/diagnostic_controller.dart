@@ -46,7 +46,7 @@ class DiagnosticController extends ChangeNotifier {
   List<AsleepSession> _reportList = const <AsleepSession>[];
   AsleepAverageReport? _averageReport;
   final Set<String> _deletedSessionIds = <String>{};
-  int _reportCacheGeneration = 0;
+  int _averageReportGeneration = 0;
   AsleepAnalysisResult? _analysisResult;
   bool? _permissionsGranted;
   AsleepError? _operationError;
@@ -176,40 +176,41 @@ class DiagnosticController extends ChangeNotifier {
 
   Future<void> loadReport(String sessionId) async {
     final normalized = sessionId.trim();
-    final generation = _reportCacheGeneration;
-    await _run('Detailed report loaded', () async {
+    await _runWithOutcome(null, () async {
       final report = await _client.getReport(normalized);
-      if (_reportCacheGeneration == generation &&
-          !_deletedSessionIds.contains(report.session.id)) {
+      if (!_deletedSessionIds.contains(report.session.id)) {
         _report = report;
+        _operationMessage = 'Detailed report loaded';
+      } else {
+        _operationMessage = 'Deleted session report ignored';
       }
     });
   }
 
   Future<void> loadReportList(String fromDate, String toDate) async {
-    final generation = _reportCacheGeneration;
     await _run('Report list loaded', () async {
       final reports = await _client.getReportList(
         fromDate.trim(),
         toDate.trim(),
       );
-      if (_reportCacheGeneration == generation) {
-        _reportList = reports
-            .where((session) => !_deletedSessionIds.contains(session.id))
-            .toList(growable: false);
-      }
+      _reportList = reports
+          .where((session) => !_deletedSessionIds.contains(session.id))
+          .toList(growable: false);
     });
   }
 
   Future<void> loadAverageReport(String fromDate, String toDate) async {
-    final generation = _reportCacheGeneration;
-    await _run('Average report loaded', () async {
+    final generation = _averageReportGeneration;
+    await _runWithOutcome(null, () async {
       final report = await _client.getAverageReport(
         fromDate.trim(),
         toDate.trim(),
       );
-      if (_reportCacheGeneration == generation) {
+      if (_averageReportGeneration == generation) {
         _averageReport = report;
+        _operationMessage = 'Average report loaded';
+      } else {
+        _operationMessage = 'Stale average report ignored';
       }
     });
   }
@@ -236,7 +237,7 @@ class DiagnosticController extends ChangeNotifier {
       await _run('Session deleted', () async {
         await _client.deleteSession(normalized);
         _deletedSessionIds.add(normalized);
-        _reportCacheGeneration++;
+        _averageReportGeneration++;
         if (_report?.session.id == normalized) {
           _report = null;
         }
@@ -317,7 +318,7 @@ class DiagnosticController extends ChangeNotifier {
   }
 
   Future<bool> _runWithOutcome(
-    String successMessage,
+    String? successMessage,
     FutureOr<void> Function() action,
   ) async {
     if (_closed) {
@@ -330,7 +331,9 @@ class DiagnosticController extends ChangeNotifier {
       _notify();
       try {
         await action();
-        _operationMessage = successMessage;
+        if (successMessage != null) {
+          _operationMessage = successMessage;
+        }
         _notify();
         return true;
       } on AsleepException catch (error) {
@@ -381,6 +384,12 @@ class DiagnosticController extends ChangeNotifier {
     if (event is TrackingUploadedEvent && _recoveryAwaitingUpload) {
       _recoveryAwaitingUpload = false;
     }
+    if (event is TrackingInterruptedEvent && _recoveryAwaitingUpload) {
+      _recoveryAwaitingUpload = false;
+    }
+    if (event is MicrophonePermissionDeniedEvent) {
+      _permissionsGranted = false;
+    }
     if (event is TrackingClosedEvent) {
       _recordingDeadCleanupRequired = false;
       if (_recoveryAwaitingUpload) {
@@ -394,6 +403,11 @@ class DiagnosticController extends ChangeNotifier {
         when _recoveryAwaitingUpload &&
             (error.category == AsleepErrorCategory.terminal ||
                 error.category == AsleepErrorCategory.recordingDead)) {
+      _recoveryAwaitingUpload = false;
+    }
+    if (event case TrackingFailedEvent(:final error)
+        when _recoveryAwaitingUpload &&
+            error.category == AsleepErrorCategory.recoveryRequired) {
       _recoveryAwaitingUpload = false;
     }
     if (event case TrackingFailedEvent(:final error)) {

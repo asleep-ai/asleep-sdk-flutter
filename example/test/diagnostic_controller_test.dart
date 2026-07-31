@@ -59,11 +59,13 @@ void main() {
         );
       final controller = _controller(platform);
 
+      await controller.initializeOrRestore('runtime-secret');
       expect(await controller.checkPermissions(), isFalse);
       expect(controller.permissionsGranted, isFalse);
       expect(await controller.requestPermissions(), isTrue);
       expect(controller.permissionsGranted, isTrue);
-      await controller.initializeOrRestore('runtime-secret');
+      platform.emit(const MicrophonePermissionDeniedEvent());
+      expect(controller.permissionsGranted, isFalse);
       expect(await controller.openBatterySettings(), isTrue);
       await controller.recheckBatteryOptimization();
 
@@ -266,6 +268,77 @@ void main() {
         expect(platform.resumeCount, 1);
 
         platform.emit(const TrackingUploadedEvent(sequence: 1));
+        expect(controller.recoveryAwaitingUpload, isFalse);
+
+        await controller.close();
+      },
+    );
+
+    test('a new interruption starts a new foreground recovery epoch', () async {
+      final platform = _FakePlatform()
+        ..restoreResult = const RestoreResult(hasActiveSession: true);
+      final controller = _controller(
+        platform,
+        hostPlatform: DiagnosticHostPlatform.ios,
+      );
+      await controller.initializeOrRestore('runtime-secret');
+      platform.emit(
+        TrackingFailedEvent(
+          error: AsleepError(
+            code: 'CANNOT_ACTIVATE_IN_BACKGROUND',
+            message: 'Foreground required',
+            category: AsleepErrorCategory.recoveryRequired,
+          ),
+        ),
+      );
+
+      await controller.handleLifecycleState(AppLifecycleState.resumed);
+      expect(platform.resumeCount, 1);
+      expect(controller.recoveryAwaitingUpload, isTrue);
+
+      platform.emit(const TrackingInterruptedEvent());
+      expect(controller.snapshot.trackingStatus, TrackingStatus.paused);
+      expect(controller.recoveryAwaitingUpload, isFalse);
+
+      await controller.handleLifecycleState(AppLifecycleState.resumed);
+      expect(platform.resumeCount, 2);
+      expect(controller.recoveryAwaitingUpload, isTrue);
+
+      platform.emit(const TrackingUploadedEvent(sequence: 2));
+      expect(controller.recoveryAwaitingUpload, isFalse);
+
+      await controller.close();
+    });
+
+    test(
+      'a new recovery-required failure starts a new recovery epoch',
+      () async {
+        final platform = _FakePlatform()
+          ..restoreResult = const RestoreResult(hasActiveSession: true);
+        final controller = _controller(
+          platform,
+          hostPlatform: DiagnosticHostPlatform.ios,
+        );
+        await controller.initializeOrRestore('runtime-secret');
+        final recoveryError = AsleepError(
+          code: 'CANNOT_ACTIVATE_IN_BACKGROUND',
+          message: 'Foreground required',
+          category: AsleepErrorCategory.recoveryRequired,
+        );
+        platform.emit(TrackingFailedEvent(error: recoveryError));
+
+        await controller.handleLifecycleState(AppLifecycleState.resumed);
+        expect(platform.resumeCount, 1);
+        expect(controller.recoveryAwaitingUpload, isTrue);
+
+        platform.emit(TrackingFailedEvent(error: recoveryError));
+        expect(controller.recoveryAwaitingUpload, isFalse);
+
+        await controller.handleLifecycleState(AppLifecycleState.resumed);
+        expect(platform.resumeCount, 2);
+        expect(controller.recoveryAwaitingUpload, isTrue);
+
+        platform.emit(const TrackingUploadedEvent(sequence: 2));
         expect(controller.recoveryAwaitingUpload, isFalse);
 
         await controller.close();
@@ -477,13 +550,71 @@ void main() {
       );
 
       platform.reportCompleter!.complete(_reportFor('session-1'));
+      await reportLoad;
+      expect(controller.operationMessage, 'Deleted session report ignored');
       platform.reportListCompleter!.complete(<AsleepSession>[
         _sessionFor('session-1'),
       ]);
-      await Future.wait(<Future<void>>[reportLoad, listLoad]);
+      await listLoad;
 
       expect(controller.report, isNull);
       expect(controller.reportList, isEmpty);
+
+      await controller.close();
+    });
+
+    test('pending average report is ignored after deletion', () async {
+      final platform = _FakePlatform()
+        ..averageReportCompleter = Completer<AsleepAverageReport>();
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+
+      final averageLoad = controller.loadAverageReport(
+        '2026-07-01',
+        '2026-07-31',
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        await controller.deleteSession('session-1', confirmed: true),
+        isTrue,
+      );
+      platform.averageReportCompleter!.complete(
+        _averageReportFor('2026-07-01', '2026-07-31'),
+      );
+      await averageLoad;
+
+      expect(controller.averageReport, isNull);
+      expect(controller.operationMessage, 'Stale average report ignored');
+
+      await controller.close();
+    });
+
+    test('deleting another session preserves pending report results', () async {
+      final platform = _FakePlatform()
+        ..reportCompleter = Completer<AsleepReport>()
+        ..reportListCompleter = Completer<List<AsleepSession>>();
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+
+      final reportLoad = controller.loadReport('session-a');
+      final listLoad = controller.loadReportList('2026-07-01', '2026-07-31');
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        await controller.deleteSession('session-b', confirmed: true),
+        isTrue,
+      );
+
+      platform.reportCompleter!.complete(_reportFor('session-a'));
+      platform.reportListCompleter!.complete(<AsleepSession>[
+        _sessionFor('session-a'),
+        _sessionFor('session-b'),
+      ]);
+      await Future.wait(<Future<void>>[reportLoad, listLoad]);
+
+      expect(controller.report?.session.id, 'session-a');
+      expect(controller.reportList.map((session) => session.id), <String>[
+        'session-a',
+      ]);
 
       await controller.close();
     });
@@ -682,6 +813,7 @@ class _FakePlatform implements AsleepPlatform {
   Completer<void>? deleteCompleter;
   Completer<AsleepReport>? reportCompleter;
   Completer<List<AsleepSession>>? reportListCompleter;
+  Completer<AsleepAverageReport>? averageReportCompleter;
   Object? disposeError;
   bool echoSetupKeyInError = false;
   String? setupApiKey;
@@ -799,16 +931,8 @@ class _FakePlatform implements AsleepPlatform {
     String toDate,
   ) async {
     calls.add('average-report:$fromDate:$toDate');
-    return AsleepAverageReport.fromJson(<String, Object?>{
-      'period': <String, Object?>{
-        'timezone': 'UTC',
-        'startDate': fromDate,
-        'endDate': toDate,
-      },
-      'peculiarities': <Object?>[],
-      'sleptSessions': <Object?>[],
-      'neverSleptSessions': <Object?>[],
-    });
+    return await averageReportCompleter?.future ??
+        _averageReportFor(fromDate, toDate);
   }
 
   @override
@@ -854,3 +978,15 @@ AsleepSession _sessionFor(String sessionId) => AsleepSession(
   startTime: DateTime.utc(2026, 7, 1),
   createdTimezone: 'UTC',
 );
+
+AsleepAverageReport _averageReportFor(String fromDate, String toDate) =>
+    AsleepAverageReport.fromJson(<String, Object?>{
+      'period': <String, Object?>{
+        'timezone': 'UTC',
+        'startDate': fromDate,
+        'endDate': toDate,
+      },
+      'peculiarities': <Object?>[],
+      'sleptSessions': <Object?>[],
+      'neverSleptSessions': <Object?>[],
+    });

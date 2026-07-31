@@ -42,6 +42,38 @@ void main() {
     );
   });
 
+  test('published battery guide waits for Settings to return', () {
+    final guide = File('example/example.md').readAsStringSync();
+
+    expect(
+      guide,
+      contains('Future<void> recheckBatteryAfterSettingsReturn() async'),
+    );
+    expect(
+      guide,
+      isNot(
+        contains(
+          'await client.requestBatteryOptimizationExemption();\n'
+          '  // Do not assume that opening Settings granted an exemption.',
+        ),
+      ),
+    );
+  });
+
+  test('published recovery guide handles a new interruption epoch', () {
+    final guide = File('example/example.md').readAsStringSync();
+
+    expect(guide, contains('event is TrackingInterruptedEvent ||'));
+    expect(
+      guide,
+      contains('the next foreground callback will re-arm the latch'),
+    );
+    expect(
+      guide,
+      contains('event.error.category == AsleepErrorCategory.recoveryRequired'),
+    );
+  });
+
   test('published state guide keeps recording-dead cleanup durable', () {
     final guide = File('example/example.md').readAsStringSync();
 
