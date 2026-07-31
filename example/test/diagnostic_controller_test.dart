@@ -82,6 +82,41 @@ void main() {
       await controller.close();
     });
 
+    test('updates Android permission state from tracking preflight', () async {
+      final platform = _FakePlatform()..permissionsGranted = false;
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+
+      await controller.startTracking();
+      expect(controller.permissionsGranted, isFalse);
+      expect(
+        controller.operationError?.code,
+        AsleepErrorCode.permissionRequired.name,
+      );
+
+      platform.permissionsGranted = true;
+      expect(await controller.checkPermissions(), isTrue);
+      platform.batteryStatus = const BatteryOptimizationStatus(
+        exempted: false,
+        platform: 'android',
+      );
+      await controller.startTracking();
+      expect(controller.permissionsGranted, isTrue);
+      expect(
+        controller.operationError?.code,
+        AsleepErrorCode.invalidState.name,
+      );
+
+      platform.batteryStatus = const BatteryOptimizationStatus(
+        exempted: true,
+        platform: 'android',
+      );
+      await controller.startTracking();
+      expect(controller.permissionsGranted, isTrue);
+
+      await controller.close();
+    });
+
     test('keeps recording-dead sessions stoppable and not startable', () async {
       final platform = _FakePlatform();
       final controller = _controller(platform);
@@ -619,6 +654,90 @@ void main() {
       await controller.close();
     });
 
+    test('only the newest detailed report request updates state', () async {
+      final older = Completer<AsleepReport>();
+      final newer = Completer<AsleepReport>();
+      final platform = _FakePlatform()
+        ..reportCompleters['session-older'] = older
+        ..reportCompleters['session-newer'] = newer;
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+
+      final olderLoad = controller.loadReport('session-older');
+      final newerLoad = controller.loadReport('session-newer');
+      await Future<void>.delayed(Duration.zero);
+
+      newer.complete(_reportFor('session-newer'));
+      await newerLoad;
+      expect(controller.report?.session.id, 'session-newer');
+      expect(controller.operationMessage, 'Detailed report loaded');
+
+      older.complete(_reportFor('session-older'));
+      await olderLoad;
+      expect(controller.report?.session.id, 'session-newer');
+      expect(controller.operationMessage, 'Detailed report loaded');
+
+      await controller.close();
+    });
+
+    test('only the newest report-list request updates state', () async {
+      final older = Completer<List<AsleepSession>>();
+      final newer = Completer<List<AsleepSession>>();
+      final platform = _FakePlatform()
+        ..reportListCompleters['2026-06-01:2026-06-30'] = older
+        ..reportListCompleters['2026-07-01:2026-07-31'] = newer;
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+
+      final olderLoad = controller.loadReportList('2026-06-01', '2026-06-30');
+      final newerLoad = controller.loadReportList('2026-07-01', '2026-07-31');
+      await Future<void>.delayed(Duration.zero);
+
+      newer.complete(<AsleepSession>[_sessionFor('session-newer')]);
+      await newerLoad;
+      expect(controller.reportList.single.id, 'session-newer');
+      expect(controller.operationMessage, 'Report list loaded');
+
+      older.complete(<AsleepSession>[_sessionFor('session-older')]);
+      await olderLoad;
+      expect(controller.reportList.single.id, 'session-newer');
+      expect(controller.operationMessage, 'Report list loaded');
+
+      await controller.close();
+    });
+
+    test('only the newest average report request updates state', () async {
+      final older = Completer<AsleepAverageReport>();
+      final newer = Completer<AsleepAverageReport>();
+      final platform = _FakePlatform()
+        ..averageReportCompleters['2026-06-01:2026-06-30'] = older
+        ..averageReportCompleters['2026-07-01:2026-07-31'] = newer;
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+
+      final olderLoad = controller.loadAverageReport(
+        '2026-06-01',
+        '2026-06-30',
+      );
+      final newerLoad = controller.loadAverageReport(
+        '2026-07-01',
+        '2026-07-31',
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      newer.complete(_averageReportFor('2026-07-01', '2026-07-31'));
+      await newerLoad;
+      expect(controller.averageReport?.period.startDate, '2026-07-01');
+      expect(controller.operationMessage, 'Average report loaded');
+
+      older.complete(_averageReportFor('2026-06-01', '2026-06-30'));
+      await olderLoad;
+      expect(controller.averageReport?.period.startDate, '2026-07-01');
+      expect(controller.operationMessage, 'Average report loaded');
+
+      await controller.close();
+    });
+
     test(
       'close drains a pending deletion before disposing the client',
       () async {
@@ -814,6 +933,12 @@ class _FakePlatform implements AsleepPlatform {
   Completer<AsleepReport>? reportCompleter;
   Completer<List<AsleepSession>>? reportListCompleter;
   Completer<AsleepAverageReport>? averageReportCompleter;
+  final Map<String, Completer<AsleepReport>> reportCompleters =
+      <String, Completer<AsleepReport>>{};
+  final Map<String, Completer<List<AsleepSession>>> reportListCompleters =
+      <String, Completer<List<AsleepSession>>>{};
+  final Map<String, Completer<AsleepAverageReport>> averageReportCompleters =
+      <String, Completer<AsleepAverageReport>>{};
   Object? disposeError;
   bool echoSetupKeyInError = false;
   String? setupApiKey;
@@ -910,6 +1035,9 @@ class _FakePlatform implements AsleepPlatform {
     if (reportError case final error?) {
       throw error;
     }
+    if (reportCompleters[sessionId] case final completer?) {
+      return completer.future;
+    }
     return await reportCompleter?.future ?? _reportFor(sessionId);
   }
 
@@ -919,6 +1047,9 @@ class _FakePlatform implements AsleepPlatform {
     String toDate,
   ) async {
     calls.add('report-list:$fromDate:$toDate');
+    if (reportListCompleters['$fromDate:$toDate'] case final completer?) {
+      return completer.future;
+    }
     if (reportListCompleter case final completer?) {
       return completer.future;
     }
@@ -931,6 +1062,9 @@ class _FakePlatform implements AsleepPlatform {
     String toDate,
   ) async {
     calls.add('average-report:$fromDate:$toDate');
+    if (averageReportCompleters['$fromDate:$toDate'] case final completer?) {
+      return completer.future;
+    }
     return await averageReportCompleter?.future ??
         _averageReportFor(fromDate, toDate);
   }

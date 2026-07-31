@@ -46,7 +46,10 @@ class DiagnosticController extends ChangeNotifier {
   List<AsleepSession> _reportList = const <AsleepSession>[];
   AsleepAverageReport? _averageReport;
   final Set<String> _deletedSessionIds = <String>{};
-  int _averageReportGeneration = 0;
+  int _detailedReportGeneration = 0;
+  int _reportListGeneration = 0;
+  int _averageReportRequestGeneration = 0;
+  int _averageReportCacheGeneration = 0;
   AsleepAnalysisResult? _analysisResult;
   bool? _permissionsGranted;
   AsleepError? _operationError;
@@ -145,7 +148,7 @@ class DiagnosticController extends ChangeNotifier {
   Future<bool?> openBatterySettings() =>
       _runValue(_client.requestBatteryOptimizationExemption);
 
-  Future<void> startTracking() => _run('Tracking start requested', () {
+  Future<void> startTracking() => _run('Tracking start requested', () async {
     final options = switch (hostPlatform) {
       DiagnosticHostPlatform.android => const AsleepTrackingOptions(
         androidNotification: AndroidNotificationOptions(
@@ -159,7 +162,18 @@ class DiagnosticController extends ChangeNotifier {
         ],
       ),
     };
-    return _client.startTracking(options);
+    try {
+      await _client.startTracking(options);
+      if (hostPlatform == DiagnosticHostPlatform.android) {
+        _permissionsGranted = true;
+      }
+    } on AsleepException catch (error) {
+      if (hostPlatform == DiagnosticHostPlatform.android &&
+          error.code == AsleepErrorCode.permissionRequired) {
+        _permissionsGranted = false;
+      }
+      rethrow;
+    }
   });
 
   Future<void> resumeTracking() => _resumeForForeground();
@@ -176,43 +190,64 @@ class DiagnosticController extends ChangeNotifier {
 
   Future<void> loadReport(String sessionId) async {
     final normalized = sessionId.trim();
+    final generation = ++_detailedReportGeneration;
     await _runWithOutcome(null, () async {
       final report = await _client.getReport(normalized);
+      if (_detailedReportGeneration != generation) {
+        return;
+      }
       if (!_deletedSessionIds.contains(report.session.id)) {
         _report = report;
         _operationMessage = 'Detailed report loaded';
       } else {
         _operationMessage = 'Deleted session report ignored';
       }
-    });
+    }, shouldCommitOutcome: () => _detailedReportGeneration == generation);
   }
 
   Future<void> loadReportList(String fromDate, String toDate) async {
-    await _run('Report list loaded', () async {
-      final reports = await _client.getReportList(
-        fromDate.trim(),
-        toDate.trim(),
-      );
-      _reportList = reports
-          .where((session) => !_deletedSessionIds.contains(session.id))
-          .toList(growable: false);
-    });
+    final generation = ++_reportListGeneration;
+    await _runWithOutcome(
+      'Report list loaded',
+      () async {
+        final reports = await _client.getReportList(
+          fromDate.trim(),
+          toDate.trim(),
+        );
+        if (_reportListGeneration != generation) {
+          return;
+        }
+        _reportList = reports
+            .where((session) => !_deletedSessionIds.contains(session.id))
+            .toList(growable: false);
+      },
+      shouldCommitOutcome: () => _reportListGeneration == generation,
+    );
   }
 
   Future<void> loadAverageReport(String fromDate, String toDate) async {
-    final generation = _averageReportGeneration;
-    await _runWithOutcome(null, () async {
-      final report = await _client.getAverageReport(
-        fromDate.trim(),
-        toDate.trim(),
-      );
-      if (_averageReportGeneration == generation) {
-        _averageReport = report;
-        _operationMessage = 'Average report loaded';
-      } else {
-        _operationMessage = 'Stale average report ignored';
-      }
-    });
+    final requestGeneration = ++_averageReportRequestGeneration;
+    final cacheGeneration = _averageReportCacheGeneration;
+    await _runWithOutcome(
+      null,
+      () async {
+        final report = await _client.getAverageReport(
+          fromDate.trim(),
+          toDate.trim(),
+        );
+        if (_averageReportRequestGeneration != requestGeneration) {
+          return;
+        }
+        if (_averageReportCacheGeneration == cacheGeneration) {
+          _averageReport = report;
+          _operationMessage = 'Average report loaded';
+        } else {
+          _operationMessage = 'Stale average report ignored';
+        }
+      },
+      shouldCommitOutcome: () =>
+          _averageReportRequestGeneration == requestGeneration,
+    );
   }
 
   /// Deletes only after the app's irreversible-action UI has confirmed.
@@ -237,7 +272,7 @@ class DiagnosticController extends ChangeNotifier {
       await _run('Session deleted', () async {
         await _client.deleteSession(normalized);
         _deletedSessionIds.add(normalized);
-        _averageReportGeneration++;
+        _averageReportCacheGeneration++;
         if (_report?.session.id == normalized) {
           _report = null;
         }
@@ -319,8 +354,9 @@ class DiagnosticController extends ChangeNotifier {
 
   Future<bool> _runWithOutcome(
     String? successMessage,
-    FutureOr<void> Function() action,
-  ) async {
+    FutureOr<void> Function() action, {
+    bool Function()? shouldCommitOutcome,
+  }) async {
     if (_closed) {
       return false;
     }
@@ -331,15 +367,24 @@ class DiagnosticController extends ChangeNotifier {
       _notify();
       try {
         await action();
+        if (!(shouldCommitOutcome?.call() ?? true)) {
+          return true;
+        }
         if (successMessage != null) {
           _operationMessage = successMessage;
         }
         _notify();
         return true;
       } on AsleepException catch (error) {
+        if (!(shouldCommitOutcome?.call() ?? true)) {
+          return false;
+        }
         _operationError = error.error ?? _client.state.error;
         _operationMessage = 'Operation failed';
       } catch (_) {
+        if (!(shouldCommitOutcome?.call() ?? true)) {
+          return false;
+        }
         _operationError =
             _client.state.error ??
             AsleepError(

@@ -223,6 +223,15 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('granted'), findsOneWidget);
 
+    await tester.tap(find.text('Start tracking'));
+    await tester.pumpAndSettle();
+    expect(find.text('denied'), findsOneWidget);
+
+    platform.permissionsGranted = true;
+    await tester.tap(find.text('Start tracking'));
+    await tester.pumpAndSettle();
+    expect(find.text('granted'), findsOneWidget);
+
     platform.emit(const MicrophonePermissionDeniedEvent());
     await tester.pump();
     expect(find.text('denied'), findsOneWidget);
