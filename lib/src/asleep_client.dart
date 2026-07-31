@@ -57,6 +57,8 @@ class AsleepClient {
   bool _resumePending = false;
   bool _disposed = false;
   Future<void>? _disposeFuture;
+  int _eventErrorRevision = 0;
+  AsleepError? _latestEventError;
 
   /// The most recently reduced SDK state.
   AsleepSnapshot get state => _state;
@@ -68,7 +70,7 @@ class AsleepClient {
   Stream<AsleepEvent> get events => _events.stream;
 
   /// Sets up the native SDK with the supplied API and service options.
-  Future<void> initialize(AsleepSetupOptions options) async {
+  Future<void> initialize(AsleepSetupOptions options) => _runCommand(() async {
     _ensureOpen();
     _ensureInitializationAvailable();
     if (_state.isTracking ||
@@ -83,13 +85,10 @@ class AsleepClient {
     _validateOptionalUrl(options.baseUrl, 'baseUrl');
     _validateOptionalUrl(options.callbackUrl, 'callbackUrl');
     _validateOptionalNonEmptyString(options.service, 'service');
-    final errorBefore = _state.error;
     _initializationInFlight = true;
     _initialized = false;
     _attachEvents();
-    _setState(
-      _state.copyWith(setupStatus: SetupStatus.inProgress, clearError: true),
-    );
+    _setState(_state.copyWith(setupStatus: SetupStatus.inProgress));
     try {
       await _restorePreflight();
       if (_state.isTracking) {
@@ -106,74 +105,67 @@ class AsleepClient {
         _state.copyWith(
           setupStatus: SetupStatus.complete,
           isOnDeviceAnalysisEnabled: options.enableOnDeviceAnalysis,
-          clearError: true,
         ),
       );
-    } catch (error) {
+    } catch (_) {
       _initialized = false;
       _setState(
         _state.copyWith(
           setupStatus: SetupStatus.idle,
           isOnDeviceAnalysisEnabled: false,
-          error: _errorAfterFailure(errorBefore, error),
         ),
       );
       rethrow;
     } finally {
       _initializationInFlight = false;
     }
-  }
+  });
 
   /// Applies credentials and endpoints without running the setup flow.
-  Future<void> configure(AsleepConfiguration configuration) async {
-    _ensureOpen();
-    _ensureInitializationAvailable();
-    if ((_state.isTracking && !_preflightConfigureAllowed) ||
-        _recordingDeadSession ||
-        _hasPendingLifecycleCommand) {
-      throw const AsleepException(
-        AsleepErrorCode.invalidState,
-        'Cannot configure while a tracking session is active.',
-      );
-    }
-    _validateRequiredString(configuration.apiKey, 'apiKey');
-    _validateOptionalNonEmptyString(configuration.userId, 'userId');
-    _validateOptionalUrl(configuration.baseUrl, 'baseUrl');
-    _validateOptionalUrl(configuration.callbackUrl, 'callbackUrl');
-    _preflightConfigureAllowed = false;
-    final errorBefore = _state.error;
-    _initializationInFlight = true;
-    _initialized = false;
-    _attachEvents();
-    _setState(
-      _state.copyWith(setupStatus: SetupStatus.inProgress, clearError: true),
-    );
-    try {
-      await _restorePreflight();
-      await _platform.configure(configuration);
-      _initialized = true;
-      _setState(
-        _state.copyWith(setupStatus: SetupStatus.complete, clearError: true),
-      );
-    } catch (error) {
-      _initialized = false;
-      _preflightConfigureAllowed =
-          _preflightRestoreDetected && _state.isTracking;
-      _setState(
-        _state.copyWith(
-          setupStatus: SetupStatus.idle,
-          isOnDeviceAnalysisEnabled: false,
-          error: _errorAfterFailure(errorBefore, error),
-        ),
-      );
-      rethrow;
-    } finally {
-      _initializationInFlight = false;
-    }
-  }
+  Future<void> configure(AsleepConfiguration configuration) =>
+      _runCommand(() async {
+        _ensureOpen();
+        _ensureInitializationAvailable();
+        if ((_state.isTracking && !_preflightConfigureAllowed) ||
+            _recordingDeadSession ||
+            _hasPendingLifecycleCommand) {
+          throw const AsleepException(
+            AsleepErrorCode.invalidState,
+            'Cannot configure while a tracking session is active.',
+          );
+        }
+        _validateRequiredString(configuration.apiKey, 'apiKey');
+        _validateOptionalNonEmptyString(configuration.userId, 'userId');
+        _validateOptionalUrl(configuration.baseUrl, 'baseUrl');
+        _validateOptionalUrl(configuration.callbackUrl, 'callbackUrl');
+        _preflightConfigureAllowed = false;
+        _initializationInFlight = true;
+        _initialized = false;
+        _attachEvents();
+        _setState(_state.copyWith(setupStatus: SetupStatus.inProgress));
+        try {
+          await _restorePreflight();
+          await _platform.configure(configuration);
+          _initialized = true;
+          _setState(_state.copyWith(setupStatus: SetupStatus.complete));
+        } catch (_) {
+          _initialized = false;
+          _preflightConfigureAllowed =
+              _preflightRestoreDetected && _state.isTracking;
+          _setState(
+            _state.copyWith(
+              setupStatus: SetupStatus.idle,
+              isOnDeviceAnalysisEnabled: false,
+            ),
+          );
+          rethrow;
+        } finally {
+          _initializationInFlight = false;
+        }
+      });
 
   /// Checks for a native tracking session that can be restored.
-  Future<RestoreResult> checkAndRestoreTracking() async {
+  Future<RestoreResult> checkAndRestoreTracking() => _runCommand(() async {
     _ensureOpen();
     if (_restoreInFlight ||
         _initializationInFlight ||
@@ -213,38 +205,39 @@ class AsleepClient {
     } finally {
       _restoreInFlight = false;
     }
-  }
+  });
 
   /// Returns the Android battery-optimization status.
-  Future<BatteryOptimizationStatus> checkBatteryOptimization() async {
-    _ensureReady();
-    final status = await _platform.checkBatteryOptimization();
-    _setState(_state.copyWith(batteryOptimizationChecked: true));
-    return status;
-  }
+  Future<BatteryOptimizationStatus> checkBatteryOptimization() =>
+      _runCommand(() async {
+        _ensureReady();
+        final status = await _platform.checkBatteryOptimization();
+        _setState(_state.copyWith(batteryOptimizationChecked: true));
+        return status;
+      });
 
   /// Requests an Android battery-optimization exemption when supported.
-  Future<bool> requestBatteryOptimizationExemption() {
+  Future<bool> requestBatteryOptimizationExemption() => _runCommand(() {
     _ensureReady();
     return _platform.requestBatteryOptimizationExemption();
-  }
+  });
 
   /// Whether all platform permissions required for tracking are granted.
-  Future<bool> hasRequiredPermissions() {
+  Future<bool> hasRequiredPermissions() => _runCommand(() {
     _ensureOpen();
     return _platform.hasRequiredPermissions();
-  }
+  });
 
   /// Requests the platform permissions required for tracking.
-  Future<bool> requestRequiredPermissions() {
+  Future<bool> requestRequiredPermissions() => _runCommand(() {
     _ensureOpen();
     return _platform.requestRequiredPermissions();
-  }
+  });
 
   /// Starts a new tracking session with optional platform-specific settings.
   Future<void> startTracking([
     AsleepTrackingOptions options = const AsleepTrackingOptions(),
-  ]) async {
+  ]) => _runCommand(() async {
     _ensureReady();
     if (!_trackingStatusChecked) {
       throw const AsleepException(
@@ -305,7 +298,6 @@ class AsleepClient {
           _state.copyWith(
             trackingStatus: TrackingStatus.tracking,
             didClose: false,
-            clearError: true,
           ),
         );
       }
@@ -320,10 +312,10 @@ class AsleepClient {
       }
       rethrow;
     }
-  }
+  });
 
   /// Resumes a paused session or one awaiting foreground recovery.
-  Future<void> resumeTracking() async {
+  Future<void> resumeTracking() => _runCommand(() async {
     _ensureReady();
     if (_state.trackingStatus != TrackingStatus.recoveryRequired &&
         _state.trackingStatus != TrackingStatus.paused) {
@@ -345,10 +337,10 @@ class AsleepClient {
       _resumePending = false;
       rethrow;
     }
-  }
+  });
 
   /// Stops the active tracking session.
-  Future<void> stopTracking() async {
+  Future<void> stopTracking() => _runCommand(() async {
     _ensureOpen();
     final cancellingPendingStart =
         _activeStartAttempt != null &&
@@ -383,10 +375,10 @@ class AsleepClient {
       _stopPending = false;
       rethrow;
     }
-  }
+  });
 
   /// Requests an analysis update for the active session.
-  Future<AnalysisRequest> requestAnalysis() async {
+  Future<AnalysisRequest> requestAnalysis() => _runCommand(() async {
     _ensureReady();
     if (_stopPending) {
       throw const AsleepException(
@@ -413,47 +405,53 @@ class AsleepClient {
       _setState(_state.copyWith(isAnalyzing: false));
       rethrow;
     }
-  }
+  });
 
   /// Fetches the detailed report for [sessionId].
-  Future<AsleepReport> getReport(String sessionId) {
+  Future<AsleepReport> getReport(String sessionId) => _runCommand(() {
     _ensureReady();
     _validateRequiredString(sessionId, 'sessionId');
     return _platform.getReport(sessionId);
-  }
+  });
 
   /// Fetches sessions whose report dates fall within the requested range.
-  Future<List<AsleepSession>> getReportList(String fromDate, String toDate) {
-    _ensureReady();
-    _validateRequiredString(fromDate, 'fromDate');
-    _validateRequiredString(toDate, 'toDate');
-    return _platform.getReportList(fromDate, toDate);
-  }
+  Future<List<AsleepSession>> getReportList(String fromDate, String toDate) =>
+      _runCommand(() {
+        _ensureReady();
+        _validateRequiredString(fromDate, 'fromDate');
+        _validateRequiredString(toDate, 'toDate');
+        return _platform.getReportList(fromDate, toDate);
+      });
 
   /// Fetches an aggregate report for the requested date range.
-  Future<AsleepAverageReport> getAverageReport(String fromDate, String toDate) {
+  Future<AsleepAverageReport> getAverageReport(
+    String fromDate,
+    String toDate,
+  ) => _runCommand(() {
     _ensureReady();
     _validateRequiredString(fromDate, 'fromDate');
     _validateRequiredString(toDate, 'toDate');
     return _platform.getAverageReport(fromDate, toDate);
-  }
+  });
 
   /// Deletes the session identified by [sessionId].
-  Future<void> deleteSession(String sessionId) {
+  Future<void> deleteSession(String sessionId) => _runCommand(() {
     _ensureReady();
     _validateRequiredString(sessionId, 'sessionId');
     return _platform.deleteSession(sessionId);
-  }
+  });
 
   /// Enables or disables native SDK diagnostic logging.
-  Future<void> setLoggingEnabled(bool enabled) {
+  Future<void> setLoggingEnabled(bool enabled) => _runCommand(() {
     _ensureOpen();
     return _platform.setLoggingEnabled(enabled);
-  }
+  });
 
   /// Removes the current error from [state].
   void clearError() {
-    _ensureOpen();
+    if (_disposed) {
+      return;
+    }
     if (_state.error != null) {
       _setState(_state.copyWith(clearError: true));
     }
@@ -480,6 +478,7 @@ class AsleepClient {
   }
 
   Future<void> _dispose() async {
+    final eventErrorRevisionBefore = _eventErrorRevision;
     final disposedState = _state.copyWith(isOnDeviceAnalysisEnabled: false);
     _disposed = true;
     _replaceState(disposedState);
@@ -501,13 +500,22 @@ class AsleepClient {
     });
     await cleanUp(_platform.dispose);
     await cleanUp(_events.close);
+    AsleepError? structuredError;
+    if (firstError case final error?) {
+      structuredError = _errorAfterFailure(eventErrorRevisionBefore, error);
+      _replaceState(_state.copyWith(error: structuredError));
+    }
     await cleanUp(_states.close);
     if (_ownsNativeLease) {
       _nativeClientClaimed = false;
     }
 
     if (firstError case final error?) {
-      Error.throwWithStackTrace(error, firstStackTrace!);
+      final semanticError = structuredError ?? _asleepError(error);
+      Error.throwWithStackTrace(
+        _exceptionForFailure(error, semanticError),
+        firstStackTrace!,
+      );
     }
   }
 
@@ -516,6 +524,7 @@ class AsleepClient {
       _handleEvent,
       onError: (Object error, StackTrace stackTrace) {
         final mapped = _asleepError(error);
+        _recordEventError(mapped);
         _setState(_state.copyWith(error: mapped));
         _events.addError(error, stackTrace);
       },
@@ -575,6 +584,7 @@ class AsleepClient {
           ),
         );
       case TrackingFailedEvent():
+        _recordEventError(event.error);
         final category = event.error.category;
         final ended =
             category == AsleepErrorCategory.terminal ||
@@ -621,17 +631,16 @@ class AsleepClient {
           ),
         );
       case MicrophonePermissionDeniedEvent():
-        _setState(
-          _state.copyWith(
-            error: AsleepError(
-              code: 'MICROPHONE_PERMISSION_DENIED',
-              message: 'Microphone permission was denied.',
-            ),
-          ),
+        final error = AsleepError(
+          code: 'MICROPHONE_PERMISSION_DENIED',
+          message: 'Microphone permission was denied.',
         );
+        _recordEventError(error);
+        _setState(_state.copyWith(error: error));
       case UserJoinedEvent():
         _setState(_state.copyWith(userId: event.userId, clearError: true));
       case UserJoinFailedEvent():
+        _recordEventError(event.error);
         _setState(_state.copyWith(error: event.error));
       case UserDeletedEvent():
         _setState(_state.copyWith(clearUserId: true));
@@ -640,6 +649,7 @@ class AsleepClient {
           _state.copyWith(setupStatus: SetupStatus.complete, clearError: true),
         );
       case SetupFailedEvent():
+        _recordEventError(event.error);
         _initialized = false;
         _setState(
           _state.copyWith(
@@ -694,11 +704,9 @@ class AsleepClient {
     }
     try {
       await requestAnalysis();
-    } catch (error) {
+    } catch (_) {
       if (!_disposed) {
-        _setState(
-          _state.copyWith(isAnalyzing: false, error: _asleepError(error)),
-        );
+        _setState(_state.copyWith(isAnalyzing: false));
       }
     }
   }
@@ -817,14 +825,89 @@ class AsleepClient {
     }
   }
 
+  Future<T> _runCommand<T>(FutureOr<T> Function() action) async {
+    final errorBefore = _state.error;
+    final eventErrorRevisionBefore = _eventErrorRevision;
+    try {
+      final result = await action();
+      _clearErrorIfUnchanged(errorBefore, eventErrorRevisionBefore);
+      return result;
+    } catch (error, stackTrace) {
+      final structuredError = _errorAfterFailure(
+        eventErrorRevisionBefore,
+        error,
+      );
+      if (_disposed) {
+        _state = _state.copyWith(error: structuredError);
+      } else if (!identical(_state.error, structuredError)) {
+        _setState(_state.copyWith(error: structuredError));
+      }
+      Error.throwWithStackTrace(
+        _exceptionForFailure(error, structuredError),
+        stackTrace,
+      );
+    }
+  }
+
+  void _clearErrorIfUnchanged(
+    AsleepError? errorBefore,
+    int eventErrorRevisionBefore,
+  ) {
+    if (!_disposed &&
+        _eventErrorRevision == eventErrorRevisionBefore &&
+        errorBefore != null &&
+        identical(_state.error, errorBefore)) {
+      _setState(_state.copyWith(clearError: true));
+    }
+  }
+
+  void _recordEventError(AsleepError error) {
+    _latestEventError = error;
+    _eventErrorRevision++;
+  }
+
+  AsleepException _exceptionForFailure(
+    Object source,
+    AsleepError structuredError,
+  ) {
+    if (source is AsleepException && identical(source.error, structuredError)) {
+      return source;
+    }
+    return AsleepException(
+      source is AsleepException ? source.code : AsleepErrorCode.nativeFailure,
+      structuredError.message,
+      nativeCode:
+          source is AsleepException &&
+              source.nativeCode == null &&
+              structuredError.code == source.code.name
+          ? null
+          : structuredError.code,
+      nativeDetails: structuredError.platformDetails,
+      cause: source is AsleepException ? source.cause ?? source : source,
+      error: structuredError,
+    );
+  }
+
   AsleepError _asleepError(Object error) {
+    if (error is AsleepException) {
+      final structuredError = error.error;
+      if (structuredError != null) {
+        return structuredError;
+      }
+    }
     if (error is AsleepException) {
       final details = error.nativeDetails;
       if (details is Map) {
         final payload = details.map(
           (key, value) => MapEntry(key.toString(), value),
         );
-        payload.putIfAbsent('code', () => error.nativeCode ?? error.code.name);
+        payload.putIfAbsent(
+          'code',
+          () =>
+              _semanticCodeForNativeCase(payload['caseName']) ??
+              error.nativeCode ??
+              error.code.name,
+        );
         payload.putIfAbsent('message', () => error.message);
         return AsleepError.fromJson(payload);
       }
@@ -844,13 +927,32 @@ class AsleepClient {
     );
   }
 
+  String? _semanticCodeForNativeCase(Object? value) {
+    if (value is! String) {
+      return null;
+    }
+    if (value.startsWith('uploadTrackingTerminated')) {
+      return 'UPLOAD_TRACKING_TERMINATED';
+    }
+    if (value.startsWith('interruptionRecoveryFailed')) {
+      return 'INTERRUPTION_RECOVERY_FAILED';
+    }
+    return switch (value) {
+      'ODAIntegrityFail' => 'ODA_INTEGRITY_FAIL',
+      'networkOffline' => 'NETWORK_OFFLINE',
+      'unableODA' => 'UNABLE_ODA',
+      'audioInitializationFailed' => 'AUDIO_INITIALIZATION_FAILED',
+      'cannotActivateInBackground' => 'CANNOT_ACTIVATE_IN_BACKGROUND',
+      _ => null,
+    };
+  }
+
   AsleepError _errorAfterFailure(
-    AsleepError? errorBefore,
+    int eventErrorRevisionBefore,
     Object commandError,
   ) {
-    final eventError = _state.error;
-    if (eventError != null && !identical(eventError, errorBefore)) {
-      return eventError;
+    if (_eventErrorRevision != eventErrorRevisionBefore) {
+      return _latestEventError!;
     }
     return _asleepError(commandError);
   }
