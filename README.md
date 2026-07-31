@@ -166,10 +166,10 @@ one-time native facts. Do not use the state stream as an event queue.
 
 `AsleepSnapshot.isOnDeviceAnalysisEnabled` is the effective upload-analysis
 policy. It becomes `true` only after `initialize()` successfully applies
-`enableOnDeviceAnalysis: true`. `configure()` and restoration preserve the
-current value; a new client therefore remains in non-ODA mode unless it first
-completes an ODA-enabled initialization. Failed setup and `dispose()` reset the
-value to `false`.
+`enableOnDeviceAnalysis: true`. Successful `configure()` and restoration
+preserve the current value; a new client therefore remains in non-ODA mode
+unless it first completes an ODA-enabled initialization. Failed setup,
+failed configuration, and `dispose()` reset the value to `false`.
 
 `TrackingStatus.paused` and `TrackingStatus.recoveryRequired` still describe a
 live native session. On iOS, call `resumeTracking()` after the app returns to

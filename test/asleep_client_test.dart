@@ -765,7 +765,12 @@ void main() {
     });
 
     test('failed configure invalidates prior readiness', () async {
-      await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
+      await client.initialize(
+        const AsleepSetupOptions(
+          apiKey: 'test-api-key',
+          enableOnDeviceAnalysis: true,
+        ),
+      );
       platform.configureError = StateError('replacement config failed');
 
       await expectLater(
@@ -776,6 +781,7 @@ void main() {
       );
 
       expect(client.state.setupStatus, SetupStatus.idle);
+      expect(client.state.isOnDeviceAnalysisEnabled, isFalse);
       expect(
         (await client.checkAndRestoreTracking()).hasActiveSession,
         isFalse,
@@ -935,6 +941,39 @@ void main() {
       expect(client.state.isOnDeviceAnalysisEnabled, isFalse);
       await eventSubscription.cancel();
       await stateSubscription.cancel();
+    });
+
+    test('dispose rejects commands from the terminal state listener', () async {
+      Object? reentrantError;
+      var observeTerminalState = false;
+      final subscription = client.states.listen((state) {
+        if (observeTerminalState && !state.isOnDeviceAnalysisEnabled) {
+          try {
+            client.clearError();
+          } catch (error) {
+            reentrantError = error;
+          }
+        }
+      });
+      await client.initialize(
+        const AsleepSetupOptions(
+          apiKey: 'test-api-key',
+          enableOnDeviceAnalysis: true,
+        ),
+      );
+
+      observeTerminalState = true;
+      await client.dispose();
+
+      expect(
+        reentrantError,
+        isA<AsleepException>().having(
+          (error) => error.code,
+          'code',
+          AsleepErrorCode.disposed,
+        ),
+      );
+      await subscription.cancel();
     });
 
     test('native stream failures surface on the public event stream', () async {

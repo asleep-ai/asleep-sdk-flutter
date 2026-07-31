@@ -162,6 +162,7 @@ class AsleepClient {
       _setState(
         _state.copyWith(
           setupStatus: SetupStatus.idle,
+          isOnDeviceAnalysisEnabled: false,
           error: _errorAfterFailure(errorBefore, error),
         ),
       );
@@ -462,8 +463,9 @@ class AsleepClient {
   Future<void> dispose() => _disposeFuture ??= _dispose();
 
   Future<void> _dispose() async {
-    _setState(_state.copyWith(isOnDeviceAnalysisEnabled: false));
+    final disposedState = _state.copyWith(isOnDeviceAnalysisEnabled: false);
     _disposed = true;
+    _replaceState(disposedState);
     Object? firstError;
     StackTrace? firstStackTrace;
 
@@ -646,6 +648,10 @@ class AsleepClient {
     if (_disposed) {
       return;
     }
+    _replaceState(value);
+  }
+
+  void _replaceState(AsleepSnapshot value) {
     if (_sameSnapshot(_state, value)) {
       return;
     }
