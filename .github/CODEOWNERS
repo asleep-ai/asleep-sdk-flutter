@@ -1,0 +1,8 @@
+# Verified repository administrator and release owner.
+* @keenranger
+
+# Require the same owner for security, support, dependency, and release policy.
+/SECURITY.md @keenranger
+/SUPPORT.md @keenranger
+/pubspec.yaml @keenranger
+/.github/workflows/ @keenranger
