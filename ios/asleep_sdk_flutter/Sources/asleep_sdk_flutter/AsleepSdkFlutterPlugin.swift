@@ -1,11 +1,23 @@
-import AsleepSDK
 import AVFoundation
+import AsleepSDK
 import Flutter
 import Foundation
+
+struct NativeInitializationToken: Equatable {
+  let value: UInt64
+}
 
 private enum NativeSdkOwnerRegistry {
   private static let lock = NSLock()
   nonisolated(unsafe) private static var owner: ObjectIdentifier?
+  nonisolated(unsafe) private static var nextInitializationToken: UInt64 = 0
+  nonisolated(unsafe) private static var drainingInitialization:
+    (
+      owner: ObjectIdentifier,
+      token: NativeInitializationToken,
+      phase: InitializationPhase
+    )?
+  nonisolated(unsafe) private static var releaseRequested = false
 
   static func claim(_ candidate: AnyObject) -> Bool {
     lock.lock()
@@ -13,6 +25,7 @@ private enum NativeSdkOwnerRegistry {
     let identifier = ObjectIdentifier(candidate)
     if owner == nil {
       owner = identifier
+      releaseRequested = false
     }
     return owner == identifier
   }
@@ -23,12 +36,109 @@ private enum NativeSdkOwnerRegistry {
     return owner == ObjectIdentifier(candidate)
   }
 
+  static func canBeginInitialization(_ candidate: AnyObject) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    let identifier = ObjectIdentifier(candidate)
+    return owner == identifier && drainingInitialization?.owner != identifier
+  }
+
+  static func makeInitializationToken() -> NativeInitializationToken {
+    lock.lock()
+    defer { lock.unlock() }
+    nextInitializationToken &+= 1
+    return NativeInitializationToken(value: nextInitializationToken)
+  }
+
+  static func markInitializationDraining(
+    _ candidate: AnyObject,
+    token: NativeInitializationToken,
+    phase: InitializationPhase
+  ) {
+    lock.lock()
+    defer { lock.unlock() }
+    let identifier = ObjectIdentifier(candidate)
+    guard owner == identifier else { return }
+    drainingInitialization = (identifier, token, phase)
+  }
+
+  static func settleInitialization(
+    _ candidate: AnyObject,
+    token: NativeInitializationToken,
+    phase: InitializationPhase
+  ) {
+    settleInitialization(
+      ownerIdentifier: ObjectIdentifier(candidate),
+      token: token,
+      phase: phase
+    )
+  }
+
+  static func settleInitialization(
+    ownerIdentifier identifier: ObjectIdentifier,
+    token: NativeInitializationToken,
+    phase: InitializationPhase
+  ) {
+    lock.lock()
+    defer { lock.unlock() }
+    guard
+      drainingInitialization?.owner == identifier,
+      drainingInitialization?.token == token,
+      drainingInitialization?.phase == phase
+    else {
+      return
+    }
+    drainingInitialization = nil
+    if releaseRequested, owner == identifier {
+      owner = nil
+      releaseRequested = false
+    }
+  }
+
   static func release(_ candidate: AnyObject) {
     lock.lock()
     defer { lock.unlock() }
-    if owner == ObjectIdentifier(candidate) {
+    let identifier = ObjectIdentifier(candidate)
+    if drainingInitialization?.owner == identifier {
+      releaseRequested = true
+    } else if owner == identifier {
       owner = nil
+      releaseRequested = false
     }
+  }
+}
+
+struct AttemptDelegateStore<Delegate: AnyObject> {
+  private var delegates: [UInt64: Delegate] = [:]
+  private(set) var acceptedAttemptID: UInt64?
+
+  mutating func store(_ delegate: Delegate, for attemptID: UInt64) {
+    delegates[attemptID] = delegate
+  }
+
+  func delegate(for attemptID: UInt64) -> Delegate? {
+    delegates[attemptID]
+  }
+
+  mutating func accept(_ attemptID: UInt64) {
+    if let acceptedAttemptID, acceptedAttemptID != attemptID {
+      delegates.removeValue(forKey: acceptedAttemptID)
+    }
+    acceptedAttemptID = attemptID
+  }
+
+  mutating func discardIfUnaccepted(_ attemptID: UInt64) {
+    guard acceptedAttemptID != attemptID else { return }
+    delegates.removeValue(forKey: attemptID)
+  }
+
+  mutating func retainOnly(_ attemptID: UInt64?) {
+    let retained = attemptID.flatMap { delegates[$0] }
+    delegates.removeAll()
+    if let attemptID, let retained {
+      delegates[attemptID] = retained
+    }
+    acceptedAttemptID = nil
   }
 }
 
@@ -69,6 +179,68 @@ func trackingStartRecoveryRequiredError() -> PigeonError {
   )
 }
 
+func initializationRecoveryRequiredError() -> PigeonError {
+  PigeonError(
+    code: "INITIALIZATION_RECOVERY_REQUIRED",
+    message: "Wait for the timed-out iOS initialization attempt to finish before retrying",
+    details: ["platform": "ios"]
+  )
+}
+
+protocol IosEventEmitting: AnyObject {
+  func emit(
+    type: String,
+    payloadJson: String,
+    completion: (() -> Void)?
+  )
+}
+
+struct IosNativeSdkActions {
+  let setLogger: (AsleepLogger) -> Void
+  let setup:
+    (
+      String,
+      URL?,
+      URL?,
+      String?,
+      Bool,
+      AsleepSetupDelegate
+    ) -> Void
+  let configure:
+    (
+      String?,
+      String?,
+      URL?,
+      URL?,
+      String?,
+      AsleepConfigDelegate
+    ) -> Void
+
+  static let live = IosNativeSdkActions(
+    setLogger: { Asleep.setLogger($0) },
+    setup: { apiKey, baseURL, callbackURL, service, enableODA, delegate in
+      Asleep.setup(
+        apiKey: apiKey,
+        baseUrl: baseURL,
+        callbackUrl: callbackURL,
+        service: service,
+        enableODA: enableODA,
+        delegate: delegate
+      )
+    },
+    configure: { apiKey, userId, baseURL, callbackURL, service, delegate in
+      Asleep.initAsleepConfig(
+        apiKey: apiKey,
+        userId: userId,
+        baseUrl: baseURL,
+        callbackUrl: callbackURL,
+        service: service,
+        delegate: delegate
+      )
+    }
+  )
+}
+
 public final class AsleepSdkFlutterPlugin: NSObject, FlutterPlugin {
   private let events = IosEventsStreamHandler()
   private lazy var hostApi = IosAsleepHostApi(events: events)
@@ -94,7 +266,7 @@ public final class AsleepSdkFlutterPlugin: NSObject, FlutterPlugin {
   }
 }
 
-private final class IosEventsStreamHandler: EventsStreamHandler {
+private final class IosEventsStreamHandler: EventsStreamHandler, IosEventEmitting {
   private var sink: PigeonEventSink<NativeEventMessage>?
 
   override func onListen(
@@ -134,17 +306,30 @@ private final class IosEventsStreamHandler: EventsStreamHandler {
   }
 }
 
-private final class IosAsleepHostApi: NSObject, AsleepHostApi {
-  private let events: IosEventsStreamHandler
+final class IosAsleepHostApi: NSObject, AsleepHostApi {
+  private struct SetupContext {
+    let attemptID: UInt64
+    let message: SetupMessage
+    let baseURL: URL?
+    let callbackURL: URL?
+  }
+
+  private let events: IosEventEmitting
+  private let nativeSdk: IosNativeSdkActions
+  private let initializationCoordinator: InitializationAttemptCoordinator
   private var trackingManager: Asleep.SleepTrackingManager?
   private var reportManager: Asleep.Reports?
   private var config: Asleep.Config?
-  private var setupCompletion: ((Result<Void, Error>) -> Void)?
-  private var setupMessage: SetupMessage?
-  private var setupBaseURL: URL?
-  private var setupCallbackURL: URL?
-  private var configuringFromSetup = false
-  private var configureCompletion: ((Result<Void, Error>) -> Void)?
+  private var setupContext: SetupContext?
+  private var setupDelegate: SetupAttemptDelegate?
+  private var configDelegates = AttemptDelegateStore<ConfigAttemptDelegate>()
+  private var activeInitializationToken: NativeInitializationToken?
+  private var drainingInitialization:
+    (
+      attemptID: UInt64,
+      token: NativeInitializationToken,
+      phase: InitializationPhase
+    )?
   private var loggingEnabled = false
   private var initializationInFlight = false
   private var trackingActive = false
@@ -155,8 +340,18 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
   private var trackingStartRecoveryGate = TrackingStartRecoveryGate()
   private var detached = false
 
-  init(events: IosEventsStreamHandler) {
+  init(
+    events: IosEventEmitting,
+    nativeSdk: IosNativeSdkActions = .live,
+    initializationScheduler: InitializationScheduling = DispatchInitializationScheduler(),
+    initializationTimeout: TimeInterval = InitializationAttemptCoordinator.defaultTimeout
+  ) {
     self.events = events
+    self.nativeSdk = nativeSdk
+    initializationCoordinator = InitializationAttemptCoordinator(
+      scheduler: initializationScheduler,
+      timeout: initializationTimeout
+    )
   }
 
   func setup(
@@ -173,23 +368,53 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
       return
     }
     guard claimNativeSdk(completion) else { return }
-    guard setupCompletion == nil, configureCompletion == nil else {
+    guard NativeSdkOwnerRegistry.canBeginInitialization(self) else {
+      completion(.failure(initializationRecoveryRequiredError()))
+      return
+    }
+    guard !initializationCoordinator.hasActiveAttempt else {
       completion(.failure(BridgeError.configurationInProgress))
       return
     }
-    setupCompletion = completion
-    setupMessage = message
-    setupBaseURL = baseURL
-    setupCallbackURL = callbackURL
+    guard
+      let attemptID = initializationCoordinator.begin(
+        phase: .setup,
+        completion: { [weak self] attemptID, result in
+          self?.finishInitialization(
+            attemptID: attemptID,
+            startedFromSetup: true,
+            result: result,
+            completion: completion
+          )
+        }
+      )
+    else {
+      completion(.failure(BridgeError.configurationInProgress))
+      return
+    }
+    let token = NativeSdkOwnerRegistry.makeInitializationToken()
+    activeInitializationToken = token
+    setupContext = SetupContext(
+      attemptID: attemptID,
+      message: message,
+      baseURL: baseURL,
+      callbackURL: callbackURL
+    )
     initializationInFlight = true
-    Asleep.setLogger(self)
-    Asleep.setup(
-      apiKey: message.apiKey,
-      baseUrl: baseURL,
-      callbackUrl: callbackURL,
-      service: message.service,
-      enableODA: message.enableOnDeviceAnalysis,
-      delegate: self
+    nativeSdk.setLogger(self)
+    let delegate = SetupAttemptDelegate(
+      owner: self,
+      attemptID: attemptID,
+      token: token
+    )
+    setupDelegate = delegate
+    nativeSdk.setup(
+      message.apiKey,
+      baseURL,
+      callbackURL,
+      message.service,
+      message.enableOnDeviceAnalysis,
+      delegate
     )
   }
 
@@ -207,19 +432,47 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
       return
     }
     guard claimNativeSdk(completion) else { return }
-    guard setupCompletion == nil, configureCompletion == nil else {
+    guard NativeSdkOwnerRegistry.canBeginInitialization(self) else {
+      completion(.failure(initializationRecoveryRequiredError()))
+      return
+    }
+    guard !initializationCoordinator.hasActiveAttempt else {
       completion(.failure(BridgeError.configurationInProgress))
       return
     }
-    configureCompletion = completion
+    guard
+      let attemptID = initializationCoordinator.begin(
+        phase: .configuration,
+        completion: { [weak self] attemptID, result in
+          self?.finishInitialization(
+            attemptID: attemptID,
+            startedFromSetup: false,
+            result: result,
+            completion: completion
+          )
+        }
+      )
+    else {
+      completion(.failure(BridgeError.configurationInProgress))
+      return
+    }
+    let token = NativeSdkOwnerRegistry.makeInitializationToken()
+    activeInitializationToken = token
     initializationInFlight = true
-    Asleep.setLogger(self)
-    Asleep.initAsleepConfig(
-      apiKey: message.apiKey,
-      userId: message.userId,
-      baseUrl: baseURL,
-      callbackUrl: callbackURL,
-      delegate: self
+    nativeSdk.setLogger(self)
+    let delegate = ConfigAttemptDelegate(
+      owner: self,
+      attemptID: attemptID,
+      token: token
+    )
+    configDelegates.store(delegate, for: attemptID)
+    nativeSdk.configure(
+      message.apiKey,
+      message.userId,
+      baseURL,
+      callbackURL,
+      nil,
+      delegate
     )
   }
 
@@ -470,14 +723,32 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
 
   func detach() {
     detached = true
-    setupCompletion?(.failure(BridgeError.engineDetached))
-    setupCompletion = nil
-    setupMessage = nil
-    setupBaseURL = nil
-    setupCallbackURL = nil
-    configuringFromSetup = false
-    configureCompletion?(.failure(BridgeError.engineDetached))
-    configureCompletion = nil
+    if let attemptID = initializationCoordinator.activeAttemptID,
+      let token = activeInitializationToken,
+      let phase = initializationCoordinator.activePhase
+    {
+      drainingInitialization = (attemptID, token, phase)
+      NativeSdkOwnerRegistry.markInitializationDraining(
+        self,
+        token: token,
+        phase: phase
+      )
+    }
+    initializationCoordinator.detach(error: BridgeError.engineDetached)
+    setupContext = nil
+    activeInitializationToken = nil
+    if let drainingInitialization {
+      if drainingInitialization.phase != .setup {
+        setupDelegate = nil
+      }
+      configDelegates.retainOnly(
+        drainingInitialization.phase == .configuration
+          ? drainingInitialization.attemptID : nil
+      )
+    } else {
+      setupDelegate = nil
+      configDelegates.retainOnly(nil)
+    }
     finishTrackingStart(.failure(BridgeError.engineDetached))
     trackingStartRecoveryGate.didTerminate()
     trackingManager = nil
@@ -488,11 +759,74 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
     releaseNativeSdkIfIdle()
   }
 
-  private func finishConfiguration(_ result: Result<Void, Error>) {
-    configureCompletion?(result)
-    configureCompletion = nil
+  private func finishInitialization(
+    attemptID: UInt64,
+    startedFromSetup: Bool,
+    result: Result<Void, Error>,
+    completion: (Result<Void, Error>) -> Void
+  ) {
+    var timedOutPhase: InitializationPhase?
+    if case .failure(let error) = result,
+      let pigeonError = error as? PigeonError,
+      pigeonError.code == "INITIALIZATION_TIMEOUT",
+      let phaseValue = (pigeonError.details as? [String: Any])?["phase"] as? String
+    {
+      timedOutPhase = InitializationPhase(rawValue: phaseValue)
+    }
+    if let phase = timedOutPhase,
+      let token = activeInitializationToken
+    {
+      drainingInitialization = (attemptID, token, phase)
+      NativeSdkOwnerRegistry.markInitializationDraining(self, token: token, phase: phase)
+    }
+    if case .failure(let error) = result,
+      let pigeonError = error as? PigeonError,
+      pigeonError.code == "INITIALIZATION_TIMEOUT",
+      !detached
+    {
+      let details = pigeonError.details as? [String: Any] ?? [:]
+      var payload = details
+      payload["code"] = pigeonError.code
+      payload["message"] =
+        pigeonError.message ?? "Native initialization timed out"
+      if details["phase"] as? String == InitializationPhase.configuration.rawValue {
+        emit("onUserJoinFailed", payload)
+      }
+      if startedFromSetup {
+        emit("onSetupDidFail", payload)
+      } else if details["phase"] as? String != InitializationPhase.configuration.rawValue {
+        emit("onUserJoinFailed", payload)
+      }
+    }
+    if setupContext?.attemptID == attemptID {
+      setupContext = nil
+    }
+    activeInitializationToken = nil
+    if drainingInitialization?.attemptID != attemptID {
+      setupDelegate = nil
+      configDelegates.discardIfUnaccepted(attemptID)
+    }
     initializationInFlight = false
     releaseNativeSdkIfIdle()
+    completion(result)
+  }
+
+  private func settleTimedOutInitialization(
+    attemptID: UInt64,
+    token: NativeInitializationToken,
+    phase: InitializationPhase
+  ) {
+    guard
+      drainingInitialization?.attemptID == attemptID,
+      drainingInitialization?.token == token,
+      drainingInitialization?.phase == phase
+    else {
+      return
+    }
+    drainingInitialization = nil
+    setupDelegate = nil
+    configDelegates.discardIfUnaccepted(attemptID)
+    NativeSdkOwnerRegistry.settleInitialization(self, token: token, phase: phase)
   }
 
   private func finishTrackingStart(_ result: Result<Void, Error>) {
@@ -559,7 +893,7 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
   }
 
   private func emitJSON(_ type: String, _ payloadJson: String) {
-    events.emit(type: type, payloadJson: payloadJson)
+    events.emit(type: type, payloadJson: payloadJson, completion: nil)
   }
 
   private func errorPayload(
@@ -614,82 +948,298 @@ private final class IosAsleepHostApi: NSObject, AsleepHostApi {
   }
 }
 
-extension IosAsleepHostApi: AsleepSetupDelegate {
-  func setupDidComplete() {
-    guard !detached else { return }
+extension IosAsleepHostApi {
+  func setupDidComplete(
+    attemptID: UInt64,
+    token: NativeInitializationToken
+  ) {
     guard
-      let message = setupMessage,
-      let completion = setupCompletion
+      !detached,
+      initializationCoordinator.isCurrent(attemptID, phase: .setup),
+      activeInitializationToken == token
     else {
-      initializationInFlight = false
-      releaseNativeSdkIfIdle()
+      settleTimedOutInitialization(
+        attemptID: attemptID,
+        token: token,
+        phase: .setup
+      )
       return
     }
-    setupMessage = nil
-    setupCompletion = nil
-    configuringFromSetup = true
-    configureCompletion = completion
-    let baseURL = setupBaseURL
-    let callbackURL = setupCallbackURL
-    setupBaseURL = nil
-    setupCallbackURL = nil
-    Asleep.initAsleepConfig(
-      apiKey: message.apiKey,
-      userId: nil,
-      baseUrl: baseURL,
-      callbackUrl: callbackURL,
-      delegate: self
+    guard
+      let context = setupContext,
+      context.attemptID == attemptID
+    else {
+      _ = initializationCoordinator.fail(
+        attemptID,
+        error: BridgeError.initializationStateLost
+      )
+      return
+    }
+    guard initializationCoordinator.advance(attemptID, to: .configuration) else {
+      return
+    }
+    setupDelegate = nil
+    let delegate = ConfigAttemptDelegate(
+      owner: self,
+      attemptID: attemptID,
+      token: token
+    )
+    configDelegates.store(delegate, for: attemptID)
+    nativeSdk.configure(
+      context.message.apiKey,
+      nil,
+      context.baseURL,
+      context.callbackURL,
+      context.message.service,
+      delegate
     )
   }
 
-  func setupDidFail(error: Asleep.AsleepError) {
-    guard !detached else { return }
+  func setupDidFail(
+    attemptID: UInt64,
+    token: NativeInitializationToken,
+    error: Asleep.AsleepError
+  ) {
+    guard
+      !detached,
+      initializationCoordinator.isCurrent(attemptID, phase: .setup),
+      activeInitializationToken == token
+    else {
+      settleTimedOutInitialization(
+        attemptID: attemptID,
+        token: token,
+        phase: .setup
+      )
+      return
+    }
     emit("onSetupDidFail", errorPayload(error, fallbackCode: "SETUP_FAILED"))
-    setupCompletion?(.failure(transportError(error)))
-    setupCompletion = nil
-    setupMessage = nil
-    setupBaseURL = nil
-    setupCallbackURL = nil
-    initializationInFlight = false
-    releaseNativeSdkIfIdle()
+    _ = initializationCoordinator.fail(attemptID, error: transportError(error))
   }
 
-  func setupInProgress(progress: Int) {
-    guard !detached else { return }
+  func setupInProgress(
+    attemptID: UInt64,
+    token: NativeInitializationToken,
+    progress: Int
+  ) {
+    guard
+      !detached,
+      initializationCoordinator.isCurrent(attemptID, phase: .setup),
+      activeInitializationToken == token
+    else {
+      return
+    }
     emit("onSetupInProgress", ["progress": progress])
   }
-}
 
-extension IosAsleepHostApi: AsleepConfigDelegate {
-  func userDidJoin(userId: String, config: Asleep.Config) {
-    guard !detached else { return }
+  func userDidJoin(
+    attemptID: UInt64,
+    token: NativeInitializationToken,
+    userId: String,
+    config: Asleep.Config
+  ) {
+    guard
+      !detached,
+      initializationCoordinator.isCurrent(attemptID, phase: .configuration),
+      activeInitializationToken == token
+    else {
+      settleTimedOutInitialization(
+        attemptID: attemptID,
+        token: token,
+        phase: .configuration
+      )
+      return
+    }
     self.config = config
     trackingManager = Asleep.createSleepTrackingManager(config: config, delegate: self)
     reportManager = Asleep.createReports(config: config)
+    configDelegates.accept(attemptID)
     emit("onUserJoined", ["userId": userId])
-    if configuringFromSetup {
-      configuringFromSetup = false
+    if setupContext?.attemptID == attemptID {
       emit("onSetupDidComplete")
     }
-    finishConfiguration(.success(()))
+    _ = initializationCoordinator.succeed(attemptID)
   }
 
-  func didFailUserJoin(error: Asleep.AsleepError) {
-    guard !detached else { return }
+  func didFailUserJoin(
+    attemptID: UInt64,
+    token: NativeInitializationToken,
+    error: Asleep.AsleepError
+  ) {
+    guard
+      !detached,
+      initializationCoordinator.isCurrent(attemptID, phase: .configuration),
+      activeInitializationToken == token
+    else {
+      settleTimedOutInitialization(
+        attemptID: attemptID,
+        token: token,
+        phase: .configuration
+      )
+      return
+    }
     emit(
       "onUserJoinFailed",
       errorPayload(error, fallbackCode: "INITIALIZATION_FAILED")
     )
-    if configuringFromSetup {
-      configuringFromSetup = false
+    if setupContext?.attemptID == attemptID {
       emit("onSetupDidFail", errorPayload(error, fallbackCode: "INIT_CONFIG_FAILED"))
     }
-    finishConfiguration(.failure(transportError(error)))
+    _ = initializationCoordinator.fail(attemptID, error: transportError(error))
+  }
+
+  func userDidDelete(attemptID: UInt64, userId: String) {
+    guard
+      !detached,
+      configDelegates.acceptedAttemptID == attemptID
+    else {
+      return
+    }
+    emit("onUserDeleted", ["userId": userId])
+  }
+}
+
+private final class SetupAttemptDelegate: AsleepSetupDelegate {
+  private weak var owner: IosAsleepHostApi?
+  private let ownerIdentifier: ObjectIdentifier
+  private let attemptID: UInt64
+  private let token: NativeInitializationToken
+
+  init(
+    owner: IosAsleepHostApi,
+    attemptID: UInt64,
+    token: NativeInitializationToken
+  ) {
+    self.owner = owner
+    ownerIdentifier = ObjectIdentifier(owner)
+    self.attemptID = attemptID
+    self.token = token
+  }
+
+  func setupDidComplete() {
+    let owner = owner
+    let ownerIdentifier = ownerIdentifier
+    let attemptID = attemptID
+    let token = token
+    dispatchInitializationCallback {
+      if let owner {
+        owner.setupDidComplete(attemptID: attemptID, token: token)
+      } else {
+        NativeSdkOwnerRegistry.settleInitialization(
+          ownerIdentifier: ownerIdentifier,
+          token: token,
+          phase: .setup
+        )
+      }
+    }
+  }
+
+  func setupDidFail(error: Asleep.AsleepError) {
+    let owner = owner
+    let ownerIdentifier = ownerIdentifier
+    let attemptID = attemptID
+    let token = token
+    dispatchInitializationCallback {
+      if let owner {
+        owner.setupDidFail(attemptID: attemptID, token: token, error: error)
+      } else {
+        NativeSdkOwnerRegistry.settleInitialization(
+          ownerIdentifier: ownerIdentifier,
+          token: token,
+          phase: .setup
+        )
+      }
+    }
+  }
+
+  func setupInProgress(progress: Int) {
+    let owner = owner
+    let attemptID = attemptID
+    let token = token
+    dispatchInitializationCallback {
+      owner?.setupInProgress(
+        attemptID: attemptID,
+        token: token,
+        progress: progress
+      )
+    }
+  }
+}
+
+private final class ConfigAttemptDelegate: AsleepConfigDelegate {
+  private weak var owner: IosAsleepHostApi?
+  private let ownerIdentifier: ObjectIdentifier
+  private let attemptID: UInt64
+  private let token: NativeInitializationToken
+
+  init(
+    owner: IosAsleepHostApi,
+    attemptID: UInt64,
+    token: NativeInitializationToken
+  ) {
+    self.owner = owner
+    ownerIdentifier = ObjectIdentifier(owner)
+    self.attemptID = attemptID
+    self.token = token
+  }
+
+  func userDidJoin(userId: String, config: Asleep.Config) {
+    let owner = owner
+    let ownerIdentifier = ownerIdentifier
+    let attemptID = attemptID
+    let token = token
+    dispatchInitializationCallback {
+      if let owner {
+        owner.userDidJoin(
+          attemptID: attemptID,
+          token: token,
+          userId: userId,
+          config: config
+        )
+      } else {
+        NativeSdkOwnerRegistry.settleInitialization(
+          ownerIdentifier: ownerIdentifier,
+          token: token,
+          phase: .configuration
+        )
+      }
+    }
+  }
+
+  func didFailUserJoin(error: Asleep.AsleepError) {
+    let owner = owner
+    let ownerIdentifier = ownerIdentifier
+    let attemptID = attemptID
+    let token = token
+    dispatchInitializationCallback {
+      if let owner {
+        owner.didFailUserJoin(
+          attemptID: attemptID,
+          token: token,
+          error: error
+        )
+      } else {
+        NativeSdkOwnerRegistry.settleInitialization(
+          ownerIdentifier: ownerIdentifier,
+          token: token,
+          phase: .configuration
+        )
+      }
+    }
   }
 
   func userDidDelete(userId: String) {
-    guard !detached else { return }
-    emit("onUserDeleted", ["userId": userId])
+    dispatchInitializationCallback { [weak self] in
+      guard let self else { return }
+      owner?.userDidDelete(attemptID: attemptID, userId: userId)
+    }
+  }
+}
+
+private func dispatchInitializationCallback(_ callback: @escaping () -> Void) {
+  if Thread.isMainThread {
+    callback()
+  } else {
+    DispatchQueue.main.async(execute: callback)
   }
 }
 
@@ -821,6 +1371,7 @@ extension IosAsleepHostApi: AsleepLogger {
 
 private enum BridgeError: LocalizedError {
   case configurationInProgress
+  case initializationStateLost
   case anotherEngineOwnsNativeSdk
   case nativeSdkNotOwned
   case trackingManagerUnavailable
@@ -838,6 +1389,8 @@ private enum BridgeError: LocalizedError {
     switch self {
     case .configurationInProgress:
       return "Configuration is already in progress"
+    case .initializationStateLost:
+      return "Native initialization state was lost before completion"
     case .anotherEngineOwnsNativeSdk:
       return "The Asleep native SDK is already owned by another Flutter engine"
     case .nativeSdkNotOwned:
