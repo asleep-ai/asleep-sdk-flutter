@@ -976,6 +976,37 @@ void main() {
       await subscription.cancel();
     });
 
+    test('terminal state listener shares the active dispose', () async {
+      platform.disposeCompleter = Completer<void>();
+      Future<void>? reentrantDispose;
+      var observeTerminalState = false;
+      final subscription = client.states.listen((state) {
+        if (observeTerminalState && !state.isOnDeviceAnalysisEnabled) {
+          observeTerminalState = false;
+          reentrantDispose = client.dispose();
+        }
+      });
+      await client.initialize(
+        const AsleepSetupOptions(
+          apiKey: 'test-api-key',
+          enableOnDeviceAnalysis: true,
+        ),
+      );
+
+      observeTerminalState = true;
+      final outerDispose = client.dispose();
+      expect(reentrantDispose, same(outerDispose));
+      await pumpEventQueue();
+      expect(platform.eventCancelCount, 1);
+      expect(platform.disposeCount, 1);
+
+      platform.disposeCompleter!.complete();
+      await Future.wait(<Future<void>>[outerDispose, reentrantDispose!]);
+      expect(platform.eventCancelCount, 1);
+      expect(platform.disposeCount, 1);
+      await subscription.cancel();
+    });
+
     test('native stream failures surface on the public event stream', () async {
       await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
       final expected = AsleepException(

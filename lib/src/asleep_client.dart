@@ -460,7 +460,24 @@ class AsleepClient {
   }
 
   /// Releases native resources and closes the client's streams.
-  Future<void> dispose() => _disposeFuture ??= _dispose();
+  Future<void> dispose() {
+    final activeDispose = _disposeFuture;
+    if (activeDispose != null) {
+      return activeDispose;
+    }
+
+    final completer = Completer<void>();
+    _disposeFuture = completer.future;
+    unawaited(
+      _dispose().then<void>(
+        (_) => completer.complete(),
+        onError: (Object error, StackTrace stackTrace) {
+          completer.completeError(error, stackTrace);
+        },
+      ),
+    );
+    return completer.future;
+  }
 
   Future<void> _dispose() async {
     final disposedState = _state.copyWith(isOnDeviceAnalysisEnabled: false);
