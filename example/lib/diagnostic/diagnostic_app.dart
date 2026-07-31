@@ -113,6 +113,7 @@ class _DiagnosticPageState extends State<DiagnosticPage>
       builder: (context, _) {
         final controller = widget.controller;
         final snapshot = controller.snapshot;
+        final trackedSessionId = controller.lastTrackedSessionId;
         return Scaffold(
           appBar: AppBar(title: const Text('Asleep SDK diagnostic')),
           body: ListView(
@@ -209,7 +210,23 @@ class _DiagnosticPageState extends State<DiagnosticPage>
                   'Recovery requested; waiting for a later tracking upload.',
                 ),
               const Divider(height: 32),
+              const Text('Current / recent session ID'),
+              SelectableText(
+                controller.lastTrackedSessionId ?? 'not available',
+                key: const Key('tracked-session-id'),
+              ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton(
+                  onPressed: trackedSessionId == null
+                      ? null
+                      : () => _sessionId.text = trackedSessionId,
+                  child: const Text('Use tracked session'),
+                ),
+              ),
+              const SizedBox(height: 8),
               TextField(
+                key: const Key('session-id-field'),
                 controller: _sessionId,
                 decoration: const InputDecoration(labelText: 'Session ID'),
               ),
@@ -296,6 +313,13 @@ class _DiagnosticPageState extends State<DiagnosticPage>
                 'Report list',
                 '${controller.reportList.length} session(s)',
               ),
+              if (controller.reportList.isNotEmpty) ...<Widget>[
+                const Text('Report session IDs'),
+                SelectableText(
+                  controller.reportList.map((session) => session.id).join('\n'),
+                  key: const Key('report-session-ids'),
+                ),
+              ],
               _StatusRow(
                 'Average report',
                 controller.averageReport == null ? 'not loaded' : 'loaded',

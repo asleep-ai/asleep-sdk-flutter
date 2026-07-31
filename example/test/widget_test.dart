@@ -39,6 +39,73 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('uses a tracked session for report and deletion actions', (
+    tester,
+  ) async {
+    _useTallSurface(tester);
+    final platform = _WidgetFakePlatform()
+      ..reportListResult = <AsleepSession>[
+        _widgetSessionFor('tracked-session'),
+      ];
+    final controller = DiagnosticController(
+      client: AsleepClient(platform: platform),
+      hostPlatform: DiagnosticHostPlatform.android,
+    );
+    await controller.initializeOrRestore('runtime-secret');
+    await tester.pumpWidget(AsleepExampleApp(controller: controller));
+
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.widgetWithText(OutlinedButton, 'Use tracked session'),
+          )
+          .onPressed,
+      isNull,
+    );
+
+    platform.emit(const TrackingCreatedEvent(sessionId: 'tracked-session'));
+    platform.emit(const TrackingClosedEvent(sessionId: 'tracked-session'));
+    await tester.pump();
+    expect(
+      tester
+          .widget<SelectableText>(find.byKey(const Key('tracked-session-id')))
+          .data,
+      'tracked-session',
+    );
+
+    await tester.tap(find.text('Use tracked session'));
+    await tester.pump();
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('session-id-field')))
+          .controller!
+          .text,
+      'tracked-session',
+    );
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Detailed report'));
+    await tester.pumpAndSettle();
+    expect(platform.reportSessionIds, <String>['tracked-session']);
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Report list'));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<SelectableText>(find.byKey(const Key('report-session-ids')))
+          .data,
+      'tracked-session',
+    );
+
+    await tester.tap(find.text('Delete session'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.text('Delete permanently'));
+    await tester.pumpAndSettle();
+    expect(platform.deletedSessionIds, <String>['tracked-session']);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('owned app contains asynchronous cleanup failures', (
     tester,
   ) async {
@@ -342,6 +409,9 @@ class _WidgetFakePlatform implements AsleepPlatform {
       StreamController<AsleepEvent>.broadcast(sync: true);
   int deleteCount = 0;
   int stopCount = 0;
+  final List<String> reportSessionIds = <String>[];
+  final List<String> deletedSessionIds = <String>[];
+  List<AsleepSession> reportListResult = const <AsleepSession>[];
   Completer<void>? deleteCompleter;
   Completer<void>? startCompleter;
   bool permissionsGranted = true;
@@ -393,14 +463,16 @@ class _WidgetFakePlatform implements AsleepPlatform {
       const AnalysisRequest(status: AnalysisRequestStatus.requested);
 
   @override
-  Future<AsleepReport> getReport(String sessionId) {
-    throw UnimplementedError();
+  Future<AsleepReport> getReport(String sessionId) async {
+    reportSessionIds.add(sessionId);
+    return _widgetReportFor(sessionId);
   }
 
   @override
-  Future<List<AsleepSession>> getReportList(String fromDate, String toDate) {
-    throw UnimplementedError();
-  }
+  Future<List<AsleepSession>> getReportList(
+    String fromDate,
+    String toDate,
+  ) async => reportListResult;
 
   @override
   Future<AsleepAverageReport> getAverageReport(String fromDate, String toDate) {
@@ -410,6 +482,7 @@ class _WidgetFakePlatform implements AsleepPlatform {
   @override
   Future<void> deleteSession(String sessionId) async {
     deleteCount++;
+    deletedSessionIds.add(sessionId);
     await deleteCompleter?.future;
   }
 
@@ -419,3 +492,22 @@ class _WidgetFakePlatform implements AsleepPlatform {
   @override
   Future<void> dispose() async {}
 }
+
+AsleepReport _widgetReportFor(String sessionId) => AsleepReport(
+  timezone: 'UTC',
+  session: AsleepReportSession(
+    id: sessionId,
+    createdTimezone: 'UTC',
+    startTime: DateTime.utc(2026, 7, 1),
+    state: 'COMPLETE',
+  ),
+  missingDataRatio: 0,
+  peculiarities: const <String>[],
+);
+
+AsleepSession _widgetSessionFor(String sessionId) => AsleepSession(
+  id: sessionId,
+  state: 'COMPLETE',
+  startTime: DateTime.utc(2026, 7, 1),
+  createdTimezone: 'UTC',
+);

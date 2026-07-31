@@ -49,6 +49,23 @@ void main() {
       await controller.close();
     });
 
+    test('retains the latest non-empty tracked session ID', () async {
+      final platform = _FakePlatform();
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+
+      expect(controller.lastTrackedSessionId, isNull);
+      platform.emit(const TrackingCreatedEvent(sessionId: 'session-created'));
+      expect(controller.lastTrackedSessionId, 'session-created');
+      platform.emit(const TrackingClosedEvent(sessionId: 'session-closed'));
+      expect(controller.lastTrackedSessionId, 'session-closed');
+      platform.emit(const TrackingCreatedEvent());
+      expect(controller.snapshot.sessionId, isNull);
+      expect(controller.lastTrackedSessionId, 'session-closed');
+
+      await controller.close();
+    });
+
     test('keeps permission and Android battery actions separate', () async {
       final platform = _FakePlatform()
         ..permissionsGranted = false

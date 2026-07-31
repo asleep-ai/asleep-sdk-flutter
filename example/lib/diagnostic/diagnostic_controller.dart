@@ -17,6 +17,10 @@ class DiagnosticController extends ChangeNotifier {
        _recordingDeadCleanupRequired =
            client.state.error?.category == AsleepErrorCategory.recordingDead &&
            !client.state.didClose {
+    final initialSessionId = client.state.sessionId?.trim();
+    if (initialSessionId != null && initialSessionId.isNotEmpty) {
+      _lastTrackedSessionId = initialSessionId;
+    }
     _stateSubscription = _client.states.listen(_onSnapshot);
     _eventSubscription = _client.events.listen(
       _onEvent,
@@ -51,6 +55,7 @@ class DiagnosticController extends ChangeNotifier {
   int _averageReportRequestGeneration = 0;
   int _averageReportCacheGeneration = 0;
   AsleepAnalysisResult? _analysisResult;
+  String? _lastTrackedSessionId;
   bool? _permissionsGranted;
   AsleepError? _operationError;
   String? _operationMessage;
@@ -74,6 +79,7 @@ class DiagnosticController extends ChangeNotifier {
   List<AsleepSession> get reportList => _reportList;
   AsleepAverageReport? get averageReport => _averageReport;
   AsleepAnalysisResult? get analysisResult => _analysisResult;
+  String? get lastTrackedSessionId => _lastTrackedSessionId;
   bool? get permissionsGranted => _permissionsGranted;
   AsleepError? get operationError => _operationError;
   String? get operationMessage => _operationMessage;
@@ -434,6 +440,10 @@ class DiagnosticController extends ChangeNotifier {
 
   void _onSnapshot(AsleepSnapshot snapshot) {
     _snapshot = snapshot;
+    final sessionId = snapshot.sessionId?.trim();
+    if (sessionId != null && sessionId.isNotEmpty) {
+      _lastTrackedSessionId = sessionId;
+    }
     _notify();
   }
 
