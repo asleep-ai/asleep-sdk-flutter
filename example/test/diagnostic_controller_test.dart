@@ -372,6 +372,49 @@ void main() {
       await controller.close();
     });
 
+    test('deduplicates concurrent confirmed deletion requests', () async {
+      final platform = _FakePlatform()..deleteCompleter = Completer<void>();
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+
+      final first = controller.deleteSession('session-1', confirmed: true);
+      await Future<void>.delayed(Duration.zero);
+      final duplicate = controller.deleteSession('session-1', confirmed: true);
+
+      expect(controller.deletionInFlight, isTrue);
+      expect(platform.deleteCount, 1);
+      expect(await duplicate, isFalse);
+
+      platform.deleteCompleter!.complete();
+      expect(await first, isTrue);
+      expect(controller.deletionInFlight, isFalse);
+      expect(platform.deleteCount, 1);
+
+      await controller.close();
+    });
+
+    test('successful deletion clears matching cached report state', () async {
+      final platform = _FakePlatform();
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+      await controller.loadReport('session-1');
+      await controller.loadReportList('2026-07-01', '2026-07-31');
+
+      expect(controller.report?.session.id, 'session-1');
+      expect(controller.reportList.map((session) => session.id), <String>[
+        'session-1',
+      ]);
+
+      expect(
+        await controller.deleteSession('session-1', confirmed: true),
+        isTrue,
+      );
+      expect(controller.report, isNull);
+      expect(controller.reportList, isEmpty);
+
+      await controller.close();
+    });
+
     test(
       'preserves the client structured error instance and redacts details',
       () async {
@@ -537,6 +580,7 @@ class _FakePlatform implements AsleepPlatform {
   AsleepAnalysisResult? analysisResult;
   Completer<void>? loggingEnableCompleter;
   Completer<void>? resumeCompleter;
+  Completer<void>? deleteCompleter;
   bool echoSetupKeyInError = false;
   String? setupApiKey;
   String? configuredApiKey;
@@ -681,6 +725,7 @@ class _FakePlatform implements AsleepPlatform {
   Future<void> deleteSession(String sessionId) async {
     calls.add('delete:$sessionId');
     deleteCount++;
+    await deleteCompleter?.future;
   }
 
   @override

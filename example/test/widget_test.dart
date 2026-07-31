@@ -70,6 +70,62 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('disables deletion through confirmation and request completion', (
+    tester,
+  ) async {
+    _useTallSurface(tester);
+    final platform = _WidgetFakePlatform()..deleteCompleter = Completer<void>();
+    final controller = DiagnosticController(
+      client: AsleepClient(platform: platform),
+      hostPlatform: DiagnosticHostPlatform.android,
+    );
+    await controller.initializeOrRestore('runtime-secret');
+    await tester.pumpWidget(AsleepExampleApp(controller: controller));
+
+    final deleteButton = tester.widget<OutlinedButton>(
+      find.widgetWithText(OutlinedButton, 'Delete session'),
+    );
+    deleteButton.onPressed!();
+    deleteButton.onPressed!();
+    await tester.pump();
+    expect(find.text('Permanently delete this session?'), findsOneWidget);
+    expect(platform.deleteCount, 0);
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.widgetWithText(OutlinedButton, 'Delete session'),
+          )
+          .onPressed,
+      isNull,
+    );
+
+    await tester.tap(find.text('Delete permanently'));
+    await tester.pump();
+    expect(platform.deleteCount, 1);
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.widgetWithText(OutlinedButton, 'Delete session'),
+          )
+          .onPressed,
+      isNull,
+    );
+
+    platform.deleteCompleter!.complete();
+    await tester.pump();
+    expect(platform.deleteCount, 1);
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.widgetWithText(OutlinedButton, 'Delete session'),
+          )
+          .onPressed,
+      isNotNull,
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('recording-dead state enables Stop and disables Start', (
     tester,
   ) async {
@@ -174,6 +230,7 @@ class _WidgetFakePlatform implements AsleepPlatform {
   final StreamController<AsleepEvent> _events =
       StreamController<AsleepEvent>.broadcast(sync: true);
   int deleteCount = 0;
+  Completer<void>? deleteCompleter;
   bool permissionsGranted = true;
   bool permissionRequestResult = true;
 
@@ -236,6 +293,7 @@ class _WidgetFakePlatform implements AsleepPlatform {
   @override
   Future<void> deleteSession(String sessionId) async {
     deleteCount++;
+    await deleteCompleter?.future;
   }
 
   @override

@@ -45,6 +45,7 @@ class DiagnosticController extends ChangeNotifier {
   String? _operationMessage;
   String _lastEvent = 'No public events yet';
   bool _loggingEnabled = false;
+  bool _deletionInFlight = false;
   bool _recoveryAwaitingUpload = false;
   bool _resumeInFlight = false;
   bool _closed = false;
@@ -62,6 +63,7 @@ class DiagnosticController extends ChangeNotifier {
   String? get operationMessage => _operationMessage;
   String get lastEvent => _lastEvent;
   bool get loggingEnabled => _loggingEnabled;
+  bool get deletionInFlight => _deletionInFlight;
   bool get recoveryAwaitingUpload => _recoveryAwaitingUpload;
   bool get canStopTracking =>
       _snapshot.isTracking ||
@@ -190,18 +192,35 @@ class DiagnosticController extends ChangeNotifier {
     String sessionId, {
     required bool confirmed,
   }) async {
+    if (_deletionInFlight) {
+      return false;
+    }
     if (!confirmed) {
       _operationError = null;
       _operationMessage = 'Deletion cancelled';
       _notify();
       return false;
     }
+    final normalized = sessionId.trim();
+    _deletionInFlight = true;
+    _notify();
     var deleted = false;
-    await _run('Session deleted', () async {
-      await _client.deleteSession(sessionId.trim());
-      deleted = true;
-    });
-    return deleted;
+    try {
+      await _run('Session deleted', () async {
+        await _client.deleteSession(normalized);
+        if (_report?.session.id == normalized) {
+          _report = null;
+        }
+        _reportList = _reportList
+            .where((session) => session.id != normalized)
+            .toList(growable: false);
+        deleted = true;
+      });
+      return deleted;
+    } finally {
+      _deletionInFlight = false;
+      _notify();
+    }
   }
 
   Future<void> setLoggingEnabled(bool enabled) {
