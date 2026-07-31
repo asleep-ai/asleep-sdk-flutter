@@ -199,27 +199,38 @@ void main() {
       await controller.close();
     });
 
-    test('derives readiness from a fully prepared existing client', () async {
-      final platform = _FakePlatform();
-      final client = AsleepClient(platform: platform);
-      await client.initialize(
-        const AsleepSetupOptions(apiKey: 'runtime-secret'),
+    for (final hostPlatform in DiagnosticHostPlatform.values) {
+      test(
+        'partially prepared ${hostPlatform.name} client still requires restore',
+        () async {
+          final platform = _FakePlatform();
+          final client = AsleepClient(platform: platform);
+          await client.initialize(
+            const AsleepSetupOptions(apiKey: 'runtime-secret'),
+          );
+          await client.checkBatteryOptimization();
+
+          final controller = DiagnosticController(
+            client: client,
+            hostPlatform: hostPlatform,
+          );
+
+          expect(controller.snapshot.setupStatus, SetupStatus.complete);
+          expect(controller.sdkPrepared, isFalse);
+          expect(controller.canPrepareSdk, isTrue);
+          expect(controller.canStartTracking, isFalse);
+
+          await controller.recheckBatteryOptimization();
+
+          expect(controller.sdkPrepared, isFalse);
+          expect(controller.canPrepareSdk, isTrue);
+          expect(controller.canStartTracking, isFalse);
+          expect(platform.calls.where((call) => call == 'start'), isEmpty);
+
+          await controller.close();
+        },
       );
-      await client.checkBatteryOptimization();
-
-      final controller = DiagnosticController(
-        client: client,
-        hostPlatform: DiagnosticHostPlatform.android,
-      );
-
-      expect(controller.sdkPrepared, isTrue);
-      expect(controller.canStartTracking, isFalse);
-
-      await controller.recheckBatteryOptimization();
-      expect(controller.canStartTracking, isTrue);
-
-      await controller.close();
-    });
+    }
 
     test('existing client without battery preparation remains gated', () async {
       final platform = _FakePlatform();
@@ -237,12 +248,12 @@ void main() {
       expect(controller.snapshot.setupStatus, SetupStatus.complete);
       expect(controller.sdkPrepared, isFalse);
       expect(controller.canStartTracking, isFalse);
-      expect(controller.canPrepareSdk, isFalse);
+      expect(controller.canPrepareSdk, isTrue);
       await controller.initializeOrRestore('replacement-secret');
-      expect(platform.calls, callsBefore);
-      expect(platform.setupApiKey, 'runtime-secret');
+      expect(platform.calls, isNot(callsBefore));
+      expect(platform.setupApiKey, 'replacement-secret');
       expect(platform.configuredApiKey, isNull);
-      expect(controller.sdkPrepared, isFalse);
+      expect(controller.sdkPrepared, isTrue);
 
       await controller.close();
     });
@@ -260,6 +271,7 @@ void main() {
       final controller = DiagnosticController(
         client: client,
         hostPlatform: DiagnosticHostPlatform.android,
+        trackingRestorationVerified: true,
       );
 
       expect(controller.sdkPrepared, isTrue);

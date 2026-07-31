@@ -9,21 +9,26 @@ enum DiagnosticHostPlatform { android, ios }
 
 /// Owns the diagnostic app's single client, subscriptions, and lifecycle.
 class DiagnosticController extends ChangeNotifier {
+  /// [trackingRestorationVerified] must only be true when an injected [client]
+  /// has completed [AsleepClient.checkAndRestoreTracking].
   DiagnosticController({
     required AsleepClient client,
     required this.hostPlatform,
+    bool trackingRestorationVerified = false,
   }) : _client = client,
        _snapshot = client.state,
        _sdkPrepared =
            client.state.setupStatus == SetupStatus.complete &&
-           client.state.batteryOptimizationChecked,
+           client.state.batteryOptimizationChecked &&
+           trackingRestorationVerified,
        _sdkPreparationAllowed =
-           client.state.setupStatus == SetupStatus.idle &&
+           (client.state.setupStatus == SetupStatus.idle ||
+               client.state.setupStatus == SetupStatus.complete) &&
            client.state.trackingStatus == TrackingStatus.idle &&
-           !client.state.batteryOptimizationChecked &&
            client.state.error == null &&
            client.state.sessionId == null &&
            !client.state.didClose,
+       _trackingRestorationChecked = trackingRestorationVerified,
        _recordingDeadCleanupRequired =
            client.state.error?.category == AsleepErrorCategory.recordingDead &&
            !client.state.didClose {
@@ -80,6 +85,7 @@ class DiagnosticController extends ChangeNotifier {
   bool _startInFlight = false;
   int _startOutcomeGeneration = 0;
   bool _trackingRestorationRequired = false;
+  bool _trackingRestorationChecked;
   bool _trackingReconciliationInFlight = false;
   bool _trackingClosePending = false;
   bool _stopAwaitingEndEvent = false;
@@ -190,6 +196,7 @@ class DiagnosticController extends ChangeNotifier {
       prepared = await _runWithOutcome('SDK ready', () async {
         final restore = await _client.checkAndRestoreTracking();
         restoreCompleted = true;
+        _trackingRestorationChecked = true;
         _trackingRestorationRequired = false;
         _trackingClosePending = false;
         if (restore.hasActiveSession) {
@@ -246,7 +253,8 @@ class DiagnosticController extends ChangeNotifier {
   Future<void> recheckBatteryOptimization() async {
     await _run('Battery status refreshed', () async {
       _batteryStatus = await _client.checkBatteryOptimization();
-      if (_client.state.setupStatus == SetupStatus.complete) {
+      if (_client.state.setupStatus == SetupStatus.complete &&
+          _trackingRestorationChecked) {
         _sdkPrepared = true;
       }
     });
@@ -409,6 +417,7 @@ class DiagnosticController extends ChangeNotifier {
 
   Future<void> _restoreTrackingState() async {
     final restore = await _client.checkAndRestoreTracking();
+    _trackingRestorationChecked = true;
     _trackingRestorationRequired = false;
     _trackingClosePending = false;
     _operationMessage = _recordingDeadCleanupRequired
