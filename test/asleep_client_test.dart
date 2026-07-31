@@ -823,6 +823,8 @@ void main() {
       platform
         ..setupFailureEvent = nativeError
         ..setupError = StateError('generic host rejection');
+      final states = <AsleepSnapshot>[];
+      final subscription = client.states.listen(states.add);
 
       final exception = await captureAsleepException(
         client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key')),
@@ -830,6 +832,13 @@ void main() {
 
       expect(client.state.error, same(nativeError));
       expect(exception.error, same(nativeError));
+      expect(
+        states
+            .where((state) => state.setupStatus == SetupStatus.idle)
+            .every((state) => identical(state.error, nativeError)),
+        isTrue,
+      );
+      await subscription.cancel();
     });
 
     test('blocks setup but can stop a restored session', () async {
@@ -964,6 +973,8 @@ void main() {
       platform
         ..configureFailureEvent = nativeError
         ..configureError = StateError('generic host rejection');
+      final states = <AsleepSnapshot>[];
+      final subscription = client.states.listen(states.add);
 
       final exception = await captureAsleepException(
         client.configure(
@@ -973,6 +984,13 @@ void main() {
 
       expect(client.state.error, same(nativeError));
       expect(exception.error, same(nativeError));
+      expect(
+        states
+            .where((state) => state.setupStatus == SetupStatus.idle)
+            .every((state) => identical(state.error, nativeError)),
+        isTrue,
+      );
+      await subscription.cancel();
     });
 
     test('rejects invalid custom URLs before invoking native setup', () async {
@@ -1052,6 +1070,120 @@ void main() {
       expect(exception.error?.message, contains('apiKey'));
     });
 
+    for (final hasPreviousError in <bool>[false, true]) {
+      final errorCase = hasPreviousError ? 'a stale error' : 'no prior error';
+
+      test(
+        'initialize failure atomically rolls back from $errorCase',
+        () async {
+          AsleepError? previousError;
+          if (hasPreviousError) {
+            platform.loggingError = StateError('old failure');
+            await captureAsleepException(client.setLoggingEnabled(true));
+            previousError = client.state.error;
+            platform.loggingError = null;
+          }
+          platform.setupError = StateError('setup failed');
+          final states = <AsleepSnapshot>[];
+          final subscription = client.states.listen(states.add);
+
+          final exception = await captureAsleepException(
+            client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key')),
+          );
+
+          final rollbacks = states
+              .where((state) => state.setupStatus == SetupStatus.idle)
+              .toList();
+          expect(rollbacks, isNotEmpty);
+          expect(
+            rollbacks.every((state) => identical(state.error, exception.error)),
+            isTrue,
+          );
+          expect(client.state.error, same(exception.error));
+          if (previousError != null) {
+            expect(
+              rollbacks.where((state) => identical(state.error, previousError)),
+              isEmpty,
+            );
+          }
+          await subscription.cancel();
+        },
+      );
+
+      test('configure failure atomically rolls back from $errorCase', () async {
+        AsleepError? previousError;
+        if (hasPreviousError) {
+          platform.loggingError = StateError('old failure');
+          await captureAsleepException(client.setLoggingEnabled(true));
+          previousError = client.state.error;
+          platform.loggingError = null;
+        }
+        platform.configureError = StateError('configuration failed');
+        final states = <AsleepSnapshot>[];
+        final subscription = client.states.listen(states.add);
+
+        final exception = await captureAsleepException(
+          client.configure(const AsleepConfiguration(apiKey: 'test-api-key')),
+        );
+
+        final rollbacks = states
+            .where((state) => state.setupStatus == SetupStatus.idle)
+            .toList();
+        expect(rollbacks, isNotEmpty);
+        expect(
+          rollbacks.every((state) => identical(state.error, exception.error)),
+          isTrue,
+        );
+        expect(client.state.error, same(exception.error));
+        if (previousError != null) {
+          expect(
+            rollbacks.where((state) => identical(state.error, previousError)),
+            isEmpty,
+          );
+        }
+        await subscription.cancel();
+      });
+
+      test(
+        'analysis failure atomically clears pending state from $errorCase',
+        () async {
+          await prepareClient(client);
+          platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
+          AsleepError? previousError;
+          if (hasPreviousError) {
+            platform.loggingError = StateError('old failure');
+            await captureAsleepException(client.setLoggingEnabled(true));
+            previousError = client.state.error;
+            platform.loggingError = null;
+          }
+          platform.analysisError = StateError('analysis failed');
+          final states = <AsleepSnapshot>[];
+          final subscription = client.states.listen(states.add);
+
+          final exception = await captureAsleepException(
+            client.requestAnalysis(),
+          );
+
+          final rollbacks = states
+              .where((state) => !state.isAnalyzing)
+              .toList();
+          expect(rollbacks, isNotEmpty);
+          expect(
+            rollbacks.every((state) => identical(state.error, exception.error)),
+            isTrue,
+          );
+          expect(client.state.error, same(exception.error));
+          if (previousError != null) {
+            expect(
+              rollbacks.where((state) => identical(state.error, previousError)),
+              isEmpty,
+            );
+          }
+          await subscription.cancel();
+        },
+      );
+    }
+
     test('native command details are shared with the snapshot error', () async {
       await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
       platform.loggingError = const AsleepException(
@@ -1082,6 +1214,8 @@ void main() {
       await prepareClient(client);
       platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
       platform.analysisCompleter = Completer<AnalysisRequest>();
+      final states = <AsleepSnapshot>[];
+      final subscription = client.states.listen(states.add);
       final analysis = client.requestAnalysis();
       await pumpEventQueue();
       final eventError = AsleepError(
@@ -1098,6 +1232,13 @@ void main() {
       expect(client.state.error, same(eventError));
       expect(exception.error, same(eventError));
       expect(client.state.isAnalyzing, isFalse);
+      expect(
+        states
+            .where((state) => !state.isAnalyzing)
+            .every((state) => identical(state.error, eventError)),
+        isTrue,
+      );
+      await subscription.cancel();
     });
 
     test('overlapping command failures keep their own errors', () async {

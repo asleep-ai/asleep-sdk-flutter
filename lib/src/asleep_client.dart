@@ -71,7 +71,7 @@ class AsleepClient {
 
   /// Sets up the native SDK with the supplied API and service options.
   Future<void> initialize(AsleepSetupOptions options) =>
-      _runStateCommand((setSuccessState) async {
+      _runStateCommand((setSuccessState, setFailureState) async {
         _ensureOpen();
         _ensureInitializationAvailable();
         if (_state.isTracking ||
@@ -108,15 +108,16 @@ class AsleepClient {
               isOnDeviceAnalysisEnabled: options.enableOnDeviceAnalysis,
             ),
           );
-        } catch (_) {
+        } catch (error, stackTrace) {
           _initialized = false;
-          _setState(
+          setFailureState(
             _state.copyWith(
               setupStatus: SetupStatus.idle,
               isOnDeviceAnalysisEnabled: false,
             ),
+            error,
+            stackTrace,
           );
-          rethrow;
         } finally {
           _initializationInFlight = false;
         }
@@ -124,7 +125,7 @@ class AsleepClient {
 
   /// Applies credentials and endpoints without running the setup flow.
   Future<void> configure(AsleepConfiguration configuration) =>
-      _runStateCommand((setSuccessState) async {
+      _runStateCommand((setSuccessState, setFailureState) async {
         _ensureOpen();
         _ensureInitializationAvailable();
         if ((_state.isTracking && !_preflightConfigureAllowed) ||
@@ -149,17 +150,18 @@ class AsleepClient {
           await _platform.configure(configuration);
           _initialized = true;
           setSuccessState(_state.copyWith(setupStatus: SetupStatus.complete));
-        } catch (_) {
+        } catch (error, stackTrace) {
           _initialized = false;
           _preflightConfigureAllowed =
               _preflightRestoreDetected && _state.isTracking;
-          _setState(
+          setFailureState(
             _state.copyWith(
               setupStatus: SetupStatus.idle,
               isOnDeviceAnalysisEnabled: false,
             ),
+            error,
+            stackTrace,
           );
-          rethrow;
         } finally {
           _initializationInFlight = false;
         }
@@ -168,6 +170,7 @@ class AsleepClient {
   /// Checks for a native tracking session that can be restored.
   Future<RestoreResult> checkAndRestoreTracking() => _runStateCommand((
     setSuccessState,
+    _,
   ) async {
     _ensureOpen();
     if (_restoreInFlight ||
@@ -212,7 +215,7 @@ class AsleepClient {
 
   /// Returns the Android battery-optimization status.
   Future<BatteryOptimizationStatus> checkBatteryOptimization() =>
-      _runStateCommand((setSuccessState) async {
+      _runStateCommand((setSuccessState, _) async {
         _ensureReady();
         final status = await _platform.checkBatteryOptimization();
         setSuccessState(_state.copyWith(batteryOptimizationChecked: true));
@@ -240,7 +243,7 @@ class AsleepClient {
   /// Starts a new tracking session with optional platform-specific settings.
   Future<void> startTracking([
     AsleepTrackingOptions options = const AsleepTrackingOptions(),
-  ]) => _runStateCommand((setSuccessState) async {
+  ]) => _runStateCommand((setSuccessState, _) async {
     _ensureReady();
     if (!_trackingStatusChecked) {
       throw const AsleepException(
@@ -381,7 +384,10 @@ class AsleepClient {
   });
 
   /// Requests an analysis update for the active session.
-  Future<AnalysisRequest> requestAnalysis() => _runCommand(() async {
+  Future<AnalysisRequest> requestAnalysis() => _runStateCommand((
+    _,
+    setFailureState,
+  ) async {
     _ensureReady();
     if (_stopPending) {
       throw const AsleepException(
@@ -404,9 +410,8 @@ class AsleepClient {
     _setState(_state.copyWith(isAnalyzing: true));
     try {
       return await _platform.requestAnalysis();
-    } catch (_) {
-      _setState(_state.copyWith(isAnalyzing: false));
-      rethrow;
+    } catch (error, stackTrace) {
+      setFailureState(_state.copyWith(isAnalyzing: false), error, stackTrace);
     }
   });
 
@@ -856,22 +861,42 @@ class AsleepClient {
   }
 
   Future<T> _runStateCommand<T>(
-    FutureOr<T> Function(void Function(AsleepSnapshot) setSuccessState) action,
+    FutureOr<T> Function(
+      void Function(AsleepSnapshot) setSuccessState,
+      Never Function(AsleepSnapshot value, Object error, StackTrace stackTrace)
+      setFailureState,
+    )
+    action,
   ) {
     final errorBefore = _state.error;
     final eventErrorRevisionBefore = _eventErrorRevision;
     return _runCommand(
-      () => action((value) {
-        if (!_disposed &&
-            _eventErrorRevision == eventErrorRevisionBefore &&
-            errorBefore != null &&
-            identical(_state.error, errorBefore) &&
-            identical(value.error, errorBefore)) {
-          _setState(value.copyWith(clearError: true));
-        } else {
-          _setState(value);
-        }
-      }),
+      () => action(
+        (value) {
+          if (!_disposed &&
+              _eventErrorRevision == eventErrorRevisionBefore &&
+              errorBefore != null &&
+              identical(_state.error, errorBefore) &&
+              identical(value.error, errorBefore)) {
+            _setState(value.copyWith(clearError: true));
+          } else {
+            _setState(value);
+          }
+        },
+        (value, error, stackTrace) {
+          final structuredError = _errorAfterFailure(
+            eventErrorRevisionBefore,
+            error,
+          );
+          if (!_disposed) {
+            _setState(value.copyWith(error: structuredError));
+          }
+          Error.throwWithStackTrace(
+            _exceptionForFailure(error, structuredError),
+            stackTrace,
+          );
+        },
+      ),
     );
   }
 
