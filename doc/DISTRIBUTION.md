@@ -209,7 +209,9 @@ gh workflow run hosted-consumer.yml -f version=0.1.0
 ```
 
 The hosted workflow must not use a path override, Git dependency, API key, or
-tracking call.
+tracking call. It retries exact-version resolution for up to 50 seconds after
+automated publication so a short pub.dev index propagation delay does not
+produce a false release failure.
 
 Run the verified latest pana version against a disposable copy because pana
 may modify the package. The release workflow pins pana 0.23.15 and rejects a

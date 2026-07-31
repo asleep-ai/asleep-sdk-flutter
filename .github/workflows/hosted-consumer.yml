@@ -65,11 +65,21 @@ jobs:
           echo "CONSUMER=$consumer" >> "$GITHUB_ENV"
 
       - name: Resolve exact hosted package
-        run: >-
-          flutter pub add
-          --no-example
-          --directory "$CONSUMER"
-          "asleep_sdk_flutter:$PACKAGE_VERSION"
+        run: |
+          for attempt in {1..6}; do
+            if flutter pub add \
+              --no-example \
+              --directory "$CONSUMER" \
+              "asleep_sdk_flutter:$PACKAGE_VERSION"; then
+              exit 0
+            fi
+            if [[ "$attempt" == "6" ]]; then
+              echo "pub.dev did not expose $PACKAGE_VERSION after 6 attempts." >&2
+              exit 1
+            fi
+            echo "Waiting for pub.dev to expose $PACKAGE_VERSION (attempt $attempt/6)."
+            sleep 10
+          done
 
       - name: Analyze hosted consumer
         run: flutter analyze "$CONSUMER"
@@ -113,11 +123,21 @@ jobs:
           echo "CONSUMER=$consumer" >> "$GITHUB_ENV"
 
       - name: Resolve exact hosted package
-        run: >-
-          flutter pub add
-          --no-example
-          --directory "$CONSUMER"
-          "asleep_sdk_flutter:$PACKAGE_VERSION"
+        run: |
+          for attempt in {1..6}; do
+            if flutter pub add \
+              --no-example \
+              --directory "$CONSUMER" \
+              "asleep_sdk_flutter:$PACKAGE_VERSION"; then
+              exit 0
+            fi
+            if [[ "$attempt" == "6" ]]; then
+              echo "pub.dev did not expose $PACKAGE_VERSION after 6 attempts." >&2
+              exit 1
+            fi
+            echo "Waiting for pub.dev to expose $PACKAGE_VERSION (attempt $attempt/6)."
+            sleep 10
+          done
 
       - name: Configure supported iOS target
         run: |
