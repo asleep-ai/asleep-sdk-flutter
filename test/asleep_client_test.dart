@@ -1281,23 +1281,39 @@ void main() {
       platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
       platform.analysisError = StateError('analysis failed');
       final retryCompleter = Completer<AnalysisRequest>();
+      final emissions = <AsleepSnapshot>[];
+      final retryListenerCurrentErrors = <AsleepError?>[];
       Future<AnalysisRequest>? retry;
+      final clearSubscription = client.states.listen((state) {
+        emissions.add(state);
+        if (!state.isAnalyzing && state.error != null) {
+          client.clearError();
+        }
+      });
       final retrySubscription = client.states.listen((state) {
         if (!state.isAnalyzing && state.error != null && retry == null) {
+          retryListenerCurrentErrors.add(client.state.error);
           platform.analysisError = null;
           platform.analysisCompleter = retryCompleter;
           retry = client.requestAnalysis();
         }
       });
-      final clearSubscription = client.states.listen((state) {
-        if (!state.isAnalyzing && state.error != null) {
-          client.clearError();
-        }
-      });
 
-      await captureAsleepException(client.requestAnalysis());
+      final exception = await captureAsleepException(client.requestAnalysis());
 
       expect(retry, isNotNull);
+      expect(retryListenerCurrentErrors, hasLength(1));
+      expect(retryListenerCurrentErrors.single, same(exception.error));
+      expect(emissions, hasLength(4));
+      expect(emissions[0].isAnalyzing, isTrue);
+      expect(emissions[0].error, isNull);
+      expect(emissions[1].isAnalyzing, isFalse);
+      expect(emissions[1].error, same(exception.error));
+      expect(emissions[2].isAnalyzing, isFalse);
+      expect(emissions[2].error, isNull);
+      expect(emissions[3].isAnalyzing, isTrue);
+      expect(emissions[3].error, isNull);
+      expect(emissions.where((state) => state.error != null), hasLength(1));
       expect(client.state.isAnalyzing, isTrue);
       expect(client.state.error, isNull);
       retryCompleter.complete(
@@ -1307,6 +1323,49 @@ void main() {
       await retrySubscription.cancel();
       await clearSubscription.cancel();
     });
+
+    test(
+      'listener error clearing composes with a reentrant native event',
+      () async {
+        await prepareClient(client);
+        platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
+        platform.analysisError = StateError('analysis failed');
+        final emissions = <AsleepSnapshot>[];
+        final eventListenerCurrentErrors = <AsleepError?>[];
+        final clearSubscription = client.states.listen((state) {
+          emissions.add(state);
+          if (!state.isAnalyzing && state.error != null) {
+            client.clearError();
+          }
+        });
+        final eventSubscription = client.states.listen((state) {
+          if (!state.isAnalyzing &&
+              state.error != null &&
+              eventListenerCurrentErrors.isEmpty) {
+            eventListenerCurrentErrors.add(client.state.error);
+            platform.emit(const TrackingInterruptedEvent());
+          }
+        });
+
+        final exception = await captureAsleepException(
+          client.requestAnalysis(),
+        );
+
+        expect(eventListenerCurrentErrors, hasLength(1));
+        expect(eventListenerCurrentErrors.single, same(exception.error));
+        expect(emissions, hasLength(4));
+        expect(emissions[1].error, same(exception.error));
+        expect(emissions[2].error, isNull);
+        expect(emissions[2].trackingStatus, TrackingStatus.tracking);
+        expect(emissions[3].error, isNull);
+        expect(emissions[3].trackingStatus, TrackingStatus.paused);
+        expect(emissions.where((state) => state.error != null), hasLength(1));
+        expect(client.state.error, isNull);
+        expect(client.state.trackingStatus, TrackingStatus.paused);
+        await clearSubscription.cancel();
+        await eventSubscription.cancel();
+      },
+    );
 
     test('native command details are shared with the snapshot error', () async {
       await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
