@@ -163,15 +163,19 @@ The following values remain unresolved and must not be guessed:
 
 - public source repository and issue tracker URLs; the current private GitHub
   URLs are intentionally omitted from public package metadata;
-- documentation URL, final topics, and funding metadata;
+- final topics and funding metadata;
 - whether native repositories and artifacts may be redistributed;
-- support contact and security-reporting channel;
-- long-term platform support and deprecation policy.
+- long-term post-1.0 platform support and deprecation policy.
 
-The package uses the verified Asleep product homepage, conservative topics, and
-the proprietary notice already used by the RN 1.2 package. The release owner
-approved applying that notice to the Flutter archive on 2026-07-30. Private
-source and issue URLs must not be published as broken public links.
+The package uses the verified Asleep product homepage, the public pub.dev API
+reference, conservative topics, and the proprietary notice already used by the
+RN 1.2 package. The verified publisher contact `nocturne@asleep.ai` is the
+public support and private security intake. `SUPPORT.md` defines current
+ownership and the experimental `0.x` compatibility and deprecation policy;
+`SECURITY.md` defines the supported security line and disclosure process. The
+release owner approved applying the proprietary notice to the Flutter archive
+on 2026-07-30. Private source and issue URLs must not be published as broken
+public links.
 
 ## Release Blockers
 

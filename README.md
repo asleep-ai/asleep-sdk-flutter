@@ -231,7 +231,28 @@ transferred to the verified `asleep.ai` publisher. OIDC publishing and GitHub
 Release creation stay disabled until their repository variables are explicitly
 approved.
 
+## Documentation, support, and security
+
+- Read the generated [Flutter API reference][api-reference] and the
+  [Asleep developer guide][developer-guide].
+- Email [nocturne@asleep.ai][support-email] with an
+  `asleep_sdk_flutter` subject prefix for defects, integration questions, and
+  feature requests. [SUPPORT.md](SUPPORT.md) lists the required details and
+  experimental compatibility policy.
+- Report suspected vulnerabilities privately by following
+  [SECURITY.md](SECURITY.md). Do not send API keys, raw audio, sleep reports,
+  user identifiers, or other personal data in an initial report.
+- Read [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a source change.
+
+The package source repository and its issue tracker are currently private, so
+they are intentionally omitted from public pub.dev metadata. The API reference
+above is the canonical public Flutter documentation URL.
+
 ## License
 
 This package uses Asleep's proprietary SDK license. Use, modification, and
 redistribution require authorization from Asleep.
+
+[api-reference]: https://pub.dev/documentation/asleep_sdk_flutter/latest/
+[developer-guide]: https://docs-en.asleep.ai/docs/quickstart
+[support-email]: mailto:nocturne@asleep.ai
