@@ -23,9 +23,62 @@ void main() {
     const publicGuide = 'https://pub.dev/packages/asleep_sdk_flutter/example';
     expect(File('README.md').readAsStringSync(), contains(publicGuide));
     expect(File('pubspec.yaml').readAsStringSync(), contains(publicGuide));
+    final guide = File('example/example.md').readAsStringSync();
+    expect(guide, contains('awaitingRecoveryUpload ||'));
+  });
+
+  test('published recovery guide releases the latch after resume failure', () {
+    final guide = File('example/example.md').readAsStringSync();
+
     expect(
-      File('example/example.md').readAsStringSync(),
-      contains('awaitingRecoveryUpload ||'),
+      guide,
+      contains(
+        'catch (_) {\n'
+        '    // No upload proof can arrive for a resume command that did not succeed.\n'
+        '    // Release the latch so a later foreground callback can retry.\n'
+        '    awaitingRecoveryUpload = false;\n'
+        '    rethrow;',
+      ),
     );
   });
+
+  test('published recovery guide releases ended-session state', () {
+    final guide = File('example/example.md').readAsStringSync();
+
+    expect(guide, contains('event is TrackingClosedEvent ||'));
+    expect(
+      guide,
+      contains('event.error.category == AsleepErrorCategory.terminal'),
+    );
+    expect(
+      guide,
+      contains('event.error.category == AsleepErrorCategory.recordingDead'),
+    );
+    expect(
+      guide,
+      contains(
+        '// Release stale state without presenting the ended session as recovered.',
+      ),
+    );
+  });
+
+  test(
+    'published cleanup guide attempts every step and rethrows first error',
+    () {
+      final guide = File('example/example.md').readAsStringSync();
+
+      expect(guide, contains('firstError ??= error;'));
+      expect(
+        guide,
+        contains('await cleanUp(() => client.setLoggingEnabled(false));'),
+      );
+      expect(guide, contains('await cleanUp(stateSubscription.cancel);'));
+      expect(guide, contains('await cleanUp(eventSubscription.cancel);'));
+      expect(guide, contains('await cleanUp(client.dispose);'));
+      expect(
+        guide,
+        contains('Error.throwWithStackTrace(firstError!, firstStackTrace!);'),
+      );
+    },
+  );
 }

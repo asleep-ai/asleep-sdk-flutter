@@ -238,6 +238,11 @@ Future<void> onAppLifecycleState(
   awaitingRecoveryUpload = true;
   try {
     await client.resumeTracking();
+  } catch (_) {
+    // No upload proof can arrive for a resume command that did not succeed.
+    // Release the latch so a later foreground callback can retry.
+    awaitingRecoveryUpload = false;
+    rethrow;
   } finally {
     resumeInFlight = false;
   }
@@ -253,6 +258,17 @@ void handleRecoveryEvent(AsleepEvent event) {
   if (event is TrackingUploadedEvent && awaitingRecoveryUpload) {
     awaitingRecoveryUpload = false;
     renderRecoveryComplete();
+    return;
+  }
+
+  final sessionEnded =
+      event is TrackingClosedEvent ||
+      (event is TrackingFailedEvent &&
+          (event.error.category == AsleepErrorCategory.terminal ||
+              event.error.category == AsleepErrorCategory.recordingDead));
+  if (sessionEnded) {
+    // Release stale state without presenting the ended session as recovered.
+    awaitingRecoveryUpload = false;
   }
 }
 ```
@@ -347,10 +363,26 @@ Future<void>? closeFuture;
 
 Future<void> close() {
   return closeFuture ??= () async {
-    await client.setLoggingEnabled(false);
-    await stateSubscription.cancel();
-    await eventSubscription.cancel();
-    await client.dispose();
+    Object? firstError;
+    StackTrace? firstStackTrace;
+
+    Future<void> cleanUp(Future<void> Function() action) async {
+      try {
+        await action();
+      } catch (error, stackTrace) {
+        firstError ??= error;
+        firstStackTrace ??= stackTrace;
+      }
+    }
+
+    await cleanUp(() => client.setLoggingEnabled(false));
+    await cleanUp(stateSubscription.cancel);
+    await cleanUp(eventSubscription.cancel);
+    await cleanUp(client.dispose);
+
+    if (firstError != null) {
+      Error.throwWithStackTrace(firstError!, firstStackTrace!);
+    }
   }();
 }
 ```
