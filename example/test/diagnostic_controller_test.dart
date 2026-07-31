@@ -779,6 +779,85 @@ void main() {
       await controller.close();
     });
 
+    test(
+      'recording-dead before Stop completion preserves cleanup until close',
+      () async {
+        final platform = _FakePlatform()..stopCompleter = Completer<void>();
+        final controller = _controller(platform);
+        await controller.initializeOrRestore('runtime-secret');
+        platform.emit(const TrackingCreatedEvent(sessionId: 'session-created'));
+
+        final stop = controller.stopTracking();
+        await Future<void>.delayed(Duration.zero);
+        platform.emit(
+          TrackingFailedEvent(
+            error: AsleepError(
+              code: 'AUDIO_INITIALIZATION_FAILED',
+              message: 'Recording stopped',
+              category: AsleepErrorCategory.recordingDead,
+            ),
+          ),
+        );
+
+        expect(controller.stopAwaitingEndEvent, isFalse);
+        expect(controller.operationMessage, 'Recording cleanup required');
+        platform.stopCompleter!.complete();
+        await stop;
+
+        expect(controller.canStopTracking, isTrue);
+        expect(controller.canStartTracking, isFalse);
+        expect(controller.operationMessage, 'Recording cleanup required');
+        expect(platform.calls.where((call) => call == 'stop').length, 1);
+
+        platform.emit(const TrackingClosedEvent(sessionId: 'session-created'));
+
+        expect(controller.stopAwaitingEndEvent, isFalse);
+        expect(controller.canStopTracking, isFalse);
+        expect(controller.canStartTracking, isTrue);
+        expect(controller.operationMessage, 'Tracking stopped');
+
+        await controller.close();
+      },
+    );
+
+    test(
+      'recording-dead after Stop completion preserves cleanup until close',
+      () async {
+        final platform = _FakePlatform();
+        final controller = _controller(platform);
+        await controller.initializeOrRestore('runtime-secret');
+        platform.emit(const TrackingCreatedEvent(sessionId: 'session-created'));
+
+        await controller.stopTracking();
+        expect(
+          controller.operationMessage,
+          'Tracking stop requested; waiting for close',
+        );
+        platform.emit(
+          TrackingFailedEvent(
+            error: AsleepError(
+              code: 'AUDIO_INITIALIZATION_FAILED',
+              message: 'Recording stopped',
+              category: AsleepErrorCategory.recordingDead,
+            ),
+          ),
+        );
+
+        expect(controller.stopAwaitingEndEvent, isFalse);
+        expect(controller.canStopTracking, isTrue);
+        expect(controller.canStartTracking, isFalse);
+        expect(controller.operationMessage, 'Recording cleanup required');
+
+        platform.emit(const TrackingClosedEvent(sessionId: 'session-created'));
+
+        expect(controller.canStopTracking, isFalse);
+        expect(controller.canStartTracking, isTrue);
+        expect(controller.operationMessage, 'Tracking stopped');
+
+        await controller.close();
+      },
+    );
+
     for (final completion in <String>['closed', 'terminal']) {
       test(
         '$completion proof completes recording cleanup without another Stop',
@@ -2261,6 +2340,7 @@ class _FakePlatform implements AsleepPlatform {
   Completer<void>? loggingEnableCompleter;
   Completer<void>? resumeCompleter;
   Completer<void>? startCompleter;
+  Completer<void>? stopCompleter;
   Completer<RestoreResult>? restoreCompleter;
   Completer<BatteryOptimizationStatus>? batteryCheckCompleter;
   final List<Completer<BatteryOptimizationStatus>> batteryCheckQueue =
@@ -2383,6 +2463,7 @@ class _FakePlatform implements AsleepPlatform {
     if (stopError case final error?) {
       throw error;
     }
+    await stopCompleter?.future;
   }
 
   @override

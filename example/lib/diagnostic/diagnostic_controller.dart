@@ -342,6 +342,8 @@ class DiagnosticController extends ChangeNotifier {
           }
         } else if (_stopAwaitingEndEvent) {
           _operationMessage = 'Tracking stop requested; waiting for close';
+        } else if (_recordingDeadCleanupRequired) {
+          _operationMessage = 'Recording cleanup required';
         } else {
           _operationMessage = 'Tracking stopped';
         }
