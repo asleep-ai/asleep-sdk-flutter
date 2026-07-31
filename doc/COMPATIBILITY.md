@@ -11,7 +11,7 @@ Verified on: 2026-07-31
 | Flutter | `>=3.44.2` | 3.44.2 is the tested minimum; 3.44.8 is the tested current stable |
 | Android | API 24, pinned `ai.asleep:asleepsdk:3.2.1` | Kotlin compile, lint, merged-manifest policy, and 16 Android bridge tests pass on the current implementation |
 | iOS | iOS 15, pinned `AsleepSDK` 3.2.0, CocoaPods-only | Existing commercial runtime baseline; wrapper pod lint and unsigned release build pass, with a native privacy-manifest follow-up |
-| Source distribution | Private GitHub repository and public pub.dev archive | `.pubignore` excludes internal `doc/` and Pigeon schema files from the archive |
+| Source distribution | Public GitHub repository and public pub.dev archive | `.pubignore` excludes internal `doc/` and Pigeon schema files from the archive |
 | License | Proprietary notice copied from the RN 1.2 package | Release owner approved applying the existing Asleep notice to this Flutter archive on 2026-07-30 |
 
 This repository contains the source for the published experimental 0.1.0
@@ -189,34 +189,37 @@ The selected values are:
 - package `asleep_sdk_flutter` version 0.1.0;
 - experimental `0.x` stability policy;
 - verified publisher `asleep.ai`;
+- public source repository
+  `https://github.com/asleep-ai/asleep-sdk-flutter`;
+- public issue tracker
+  `https://github.com/asleep-ai/asleep-sdk-flutter/issues`;
 - Android 3.2.1 and iOS 3.2.0 native dependencies;
 - Android API 24, iOS 15, Dart `^3.12.2`, and Flutter `>=3.44.2` experimental
   floors.
 
 The following values remain unresolved and must not be guessed:
 
-- public source repository and issue tracker URLs; the current private GitHub
-  URLs are intentionally omitted from public package metadata;
 - final topics and funding metadata;
 - whether native repositories and artifacts may be redistributed;
 - long-term post-1.0 platform support and deprecation policy.
 
 The package uses the verified Asleep product homepage, the public pub.dev API
 reference, conservative topics, and the proprietary notice already used by the
-RN 1.2 package. The verified publisher contact `nocturne@asleep.ai` is the
-public support and private security intake. `SUPPORT.md` defines current
-ownership and the experimental `0.x` compatibility and deprecation policy;
-`SECURITY.md` defines the supported security line and disclosure process. The
-release owner approved applying the proprietary notice to the Flutter archive
-on 2026-07-30. Private source and issue URLs must not be published as broken
-public links.
+RN 1.2 package. GitHub Issues is the public package intake. The verified
+publisher contact `nocturne@asleep.ai` handles private support and security
+intake. `SUPPORT.md` defines current ownership and the experimental `0.x`
+compatibility and deprecation policy; `SECURITY.md` defines the supported
+security line and disclosure process. The release owner approved applying the
+proprietary notice to the Flutter archive on 2026-07-30. The public source and
+issue URLs are included in package metadata and must remain reachable without
+authentication.
 
 ## Release Blockers
 
 A public package must not be published until all of the following are resolved:
 
-1. Product approval for public source distribution and external use of both
-   native SDK dependency paths.
+1. Confirm public source distribution and external use of both native SDK
+   dependency paths remain authorized.
 2. Recheck Android 3.2.1 and iOS 3.2.0 from clean release-CI runners without
    developer-local credentials; candidate and hosted consumer builds provide
    this build-time proof but not runtime tracking proof.

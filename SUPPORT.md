@@ -4,20 +4,19 @@
 response-time SLA or a guarantee that every requested integration will be
 supported.
 
-## Contact
+## Public intake
 
-Email [nocturne@asleep.ai](mailto:nocturne@asleep.ai) for all non-security
-requests. Use one of these subject prefixes so the request can be routed:
+Use the [public issue tracker](https://github.com/asleep-ai/asleep-sdk-flutter/issues)
+for non-security package requests:
 
-| Request | Subject prefix |
+| Request | Issue content |
 |---|---|
-| Defect | `[asleep_sdk_flutter bug]` |
-| Integration question | `[asleep_sdk_flutter support]` |
-| Feature request | `[asleep_sdk_flutter feature]` |
+| Defect | Reproduction, expected behavior, and actual behavior |
+| Integration question | Intended integration and the point that is blocked |
+| Feature request | Use case, proposed behavior, and alternatives considered |
 
-The package source repository and its issue tracker are private. Do not use a
-private GitHub URL from pub.dev unless Asleep has explicitly granted your
-account access.
+The [source repository](https://github.com/asleep-ai/asleep-sdk-flutter) and
+its issue tracker are public. Search existing issues before opening a new one.
 
 For defects and integration questions, include:
 
@@ -31,19 +30,26 @@ Never send API keys, access tokens, raw audio, sleep reports, user IDs, or
 other personal data. If protected evidence is necessary, ask for an approved
 transfer method first.
 
+For account, credential, or service requests that should not be public, email
+[nocturne@asleep.ai](mailto:nocturne@asleep.ai) with the subject
+`[asleep_sdk_flutter support]`. Suspected vulnerabilities follow the separate
+private process in [SECURITY.md](SECURITY.md).
+
 ## Documentation
 
 - [Flutter API reference](https://pub.dev/documentation/asleep_sdk_flutter/latest/)
 - [Asleep developer guide](https://docs-en.asleep.ai/docs/quickstart)
 - [Package page](https://pub.dev/packages/asleep_sdk_flutter)
+- [Source repository](https://github.com/asleep-ai/asleep-sdk-flutter)
+- [Issue tracker](https://github.com/asleep-ai/asleep-sdk-flutter/issues)
 
 ## Triage and ownership
 
-The verified publisher mailbox is the public intake owner. The repository
-owner reviews new requests, routes security reports, maintains native
-dependencies, and approves package releases. `CODEOWNERS` records the current
-repository review owner; changing that ownership requires a reviewed
-repository change.
+The repository owner reviews public issues and pull requests, routes private
+support and security reports, maintains native dependencies, and approves
+package releases. The verified publisher mailbox owns private non-security
+intake. `CODEOWNERS` records the current repository review owner; changing
+that ownership requires a reviewed repository change.
 
 Defects that can be reproduced in this Flutter package are prioritized ahead
 of feature requests. Native SDK, service, credential, and account requests are

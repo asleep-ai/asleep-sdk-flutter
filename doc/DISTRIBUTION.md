@@ -5,13 +5,13 @@ documentation linked below.
 
 ## Current safety boundary
 
-The GitHub repository is private. A pub.dev release is public even when its
-source repository is private: any pub user can download the package archive
-and its included source files. Experimental version 0.1.0 is published under
-the verified `asleep.ai` publisher. The release owner confirmed on 2026-07-30
-that the existing Asleep proprietary notice applies to the Flutter archive.
-`.pubignore` excludes internal `doc/` and Pigeon schema files; Dart, Kotlin,
-Swift, generated transport, and example sources remain public archive contents.
+The GitHub repository and pub.dev package archive are public. Any user can
+browse the repository or download the archive and its included source files.
+Experimental version 0.1.0 is published under the verified `asleep.ai`
+publisher. The release owner confirmed on 2026-07-30 that the existing Asleep
+proprietary notice applies to the Flutter archive. `.pubignore` excludes
+internal `doc/` and Pigeon schema files; Dart, Kotlin, Swift, generated
+transport, and example sources remain public archive contents.
 
 The pinned AsleepSDK 3.2.0 CocoaPods artifact is the existing commercial
 runtime baseline. It does not contain a privacy manifest. That is an App Store
@@ -66,42 +66,42 @@ registry vendor and operational owner remain undecided.
 
 ## Public release prerequisites
 
-The release owner must resolve every item before the first upload:
+The release owner must resolve every item before the next upload:
 
 1. Approve public redistribution of every Dart, Kotlin, Swift, generated
    transport, and example source file in the package archive.
-2. Recheck that `asleep_sdk_flutter` is still unused on pub.dev.
-3. Provide public source and issue URLs or keep both fields omitted. Do not
-   expose private GitHub URLs as broken public package metadata.
+2. Confirm the candidate is attached to the verified `asleep.ai` publisher.
+3. Confirm the public source and issue URLs remain reachable and match the
+   package metadata.
 4. Recheck that the pinned Android Maven and iOS CocoaPods artifacts remain
    publicly downloadable for external consumers.
 5. Confirm the supported Flutter, Dart, Android, iOS, Asleep Android SDK, and
    Asleep iOS SDK versions still match `COMPATIBILITY.md`.
 6. Review the exact `dart pub publish --dry-run` archive and run the secret
    scan from a clean release commit.
-7. Have an authorized human run the first `dart pub publish`.
+7. Confirm the pub.dev OIDC link for the repository is active. If automated
+   publishing is unavailable, have an authorized uploader run
+   `dart pub publish`.
 
-The first version of a new package cannot use pub.dev automated publishing.
-The first human uploader becomes the package uploader. After that release, the
-uploader can transfer the package to a verified publisher in pub.dev Admin.
-That transfer cannot be reversed back to an individual account.
+The initial 0.1.0 upload and verified publisher transfer are complete.
+Subsequent releases should use pub.dev automated publishing when the OIDC link
+and repository controls are active.
 
 ## Automated pub.dev publishing
 
-After the first manual release:
+For subsequent releases:
 
 1. In pub.dev Admin, connect `asleep-ai/asleep-sdk-flutter`.
 2. Configure the tag pattern as `v{{version}}`.
 3. Require the GitHub Environment named `pub.dev`.
 4. In GitHub, create the `pub.dev` Environment with required reviewers and
-   prevent self-review when the organization plan supports those controls for
-   private repositories.
+   prevent self-review.
 5. Protect `v*` tags with a repository ruleset that restricts creation,
    updates, deletion, and bypass actors.
 6. Confirm the release commit contains the approved stable package version and
    public archive.
-7. Set `PUBDEV_PUBLISH_ENABLED=true` only after the first manual publish and
-   all preceding controls are complete.
+7. Set `PUBDEV_PUBLISH_ENABLED=true` only after all preceding controls are
+   complete.
 8. Set `RELEASE_CREATION_ENABLED=true` only after tag-triggered GitHub Releases
    are approved.
 
@@ -118,9 +118,8 @@ jobs:
       environment: pub.dev
 ```
 
-GitHub Environment required reviewers for private repositories depend on the
-organization plan. If unavailable, the tag ruleset and restricted bypass list
-become mandatory controls rather than optional defense in depth.
+The public repository supports GitHub Environment required reviewers. Keep
+them enabled alongside the tag ruleset and restricted bypass list.
 
 ## Rollback and incident response
 

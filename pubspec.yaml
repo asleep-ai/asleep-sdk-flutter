@@ -2,6 +2,8 @@ name: asleep_sdk_flutter
 description: Experimental Flutter plugin for Asleep audio-based sleep tracking on Android and iOS.
 version: 0.1.0
 homepage: https://www.asleep.ai
+repository: https://github.com/asleep-ai/asleep-sdk-flutter
+issue_tracker: https://github.com/asleep-ai/asleep-sdk-flutter/issues
 documentation: https://pub.dev/packages/asleep_sdk_flutter/example
 topics:
   - sleep

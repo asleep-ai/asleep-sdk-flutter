@@ -4,14 +4,16 @@ Thank you for helping improve `asleep_sdk_flutter`.
 
 ## Before proposing a change
 
-The package is public on pub.dev, but its source repository and issue tracker
-are currently private. External contributors should start with the appropriate
-email route in [SUPPORT.md](SUPPORT.md). Asleep may grant repository access or
-request a patch after triage.
+The package, [source repository](https://github.com/asleep-ai/asleep-sdk-flutter),
+and issue tracker are public. Search
+[existing issues](https://github.com/asleep-ai/asleep-sdk-flutter/issues)
+before opening a focused defect report or feature request. For a source
+change, open or reference an issue, fork the repository, and submit a pull
+request against `main`.
 
 Report suspected vulnerabilities privately by following
 [SECURITY.md](SECURITY.md). Do not include security details in a regular
-support request.
+issue or pull request.
 
 ## Change scope
 
