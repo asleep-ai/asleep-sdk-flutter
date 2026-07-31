@@ -368,12 +368,20 @@ void main() {
     });
 
     test('requests analysis on every ODA upload', () async {
+      final modes = <bool>[];
+      final subscription = client.states.listen(
+        (state) => modes.add(state.isOnDeviceAnalysisEnabled),
+      );
+
       await client.initialize(
         const AsleepSetupOptions(
           apiKey: 'test-api-key',
           enableOnDeviceAnalysis: true,
         ),
       );
+      expect(client.state.isOnDeviceAnalysisEnabled, isTrue);
+      expect(modes, contains(true));
+
       platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
 
       platform.emit(const TrackingUploadedEvent(sequence: 1));
@@ -381,6 +389,21 @@ void main() {
 
       expect(platform.analysisRequestCount, 1);
       expect(client.state.isAnalyzing, isTrue);
+      await subscription.cancel();
+    });
+
+    test('uses non-ODA cadence from the public snapshot', () async {
+      await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
+      expect(client.state.isOnDeviceAnalysisEnabled, isFalse);
+      platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
+
+      platform.emit(const TrackingUploadedEvent(sequence: 1));
+      await pumpEventQueue();
+      expect(platform.analysisRequestCount, 0);
+
+      platform.emit(const TrackingUploadedEvent(sequence: 11));
+      await pumpEventQueue();
+      expect(platform.analysisRequestCount, 1);
     });
 
     test(
@@ -475,12 +498,26 @@ void main() {
       await client.configure(
         const AsleepConfiguration(apiKey: 'replacement-api-key'),
       );
+      expect(client.state.isOnDeviceAnalysisEnabled, isTrue);
       platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
 
       platform.emit(const TrackingUploadedEvent(sequence: 1));
       await pumpEventQueue();
 
       expect(platform.analysisRequestCount, 1);
+    });
+
+    test('restoration and configure default to non-ODA mode', () async {
+      platform.hasActiveSession = true;
+
+      final restored = await client.checkAndRestoreTracking();
+      expect(restored.hasActiveSession, isTrue);
+      expect(client.state.isOnDeviceAnalysisEnabled, isFalse);
+
+      await client.configure(
+        const AsleepConfiguration(apiKey: 'replacement-api-key'),
+      );
+      expect(client.state.isOnDeviceAnalysisEnabled, isFalse);
     });
 
     test('recording-dead failure does not report a clean close', () async {
@@ -622,7 +659,13 @@ void main() {
     });
 
     test('failed reinitialize invalidates prior readiness', () async {
-      await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
+      await client.initialize(
+        const AsleepSetupOptions(
+          apiKey: 'test-api-key',
+          enableOnDeviceAnalysis: true,
+        ),
+      );
+      expect(client.state.isOnDeviceAnalysisEnabled, isTrue);
       platform.setupError = StateError('replacement setup failed');
 
       await expectLater(
@@ -633,6 +676,7 @@ void main() {
       );
 
       expect(client.state.setupStatus, SetupStatus.idle);
+      expect(client.state.isOnDeviceAnalysisEnabled, isFalse);
       expect(
         (await client.checkAndRestoreTracking()).hasActiveSession,
         isFalse,
@@ -868,19 +912,27 @@ void main() {
     test('dispose detaches native events and closes streams', () async {
       var eventCount = 0;
       var stateDone = false;
+      final modes = <bool>[];
       final eventSubscription = client.events.listen((_) => eventCount++);
       final stateSubscription = client.states.listen(
-        (_) {},
+        (state) => modes.add(state.isOnDeviceAnalysisEnabled),
         onDone: () => stateDone = true,
       );
 
-      await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
+      await client.initialize(
+        const AsleepSetupOptions(
+          apiKey: 'test-api-key',
+          enableOnDeviceAnalysis: true,
+        ),
+      );
       await client.dispose();
       platform.emit(const TrackingCreatedEvent(sessionId: 'ignored'));
       await pumpEventQueue();
 
       expect(eventCount, 0);
       expect(stateDone, isTrue);
+      expect(modes.sublist(modes.length - 2), <bool>[true, false]);
+      expect(client.state.isOnDeviceAnalysisEnabled, isFalse);
       await eventSubscription.cancel();
       await stateSubscription.cancel();
     });

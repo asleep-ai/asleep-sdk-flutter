@@ -32,6 +32,7 @@ final asleep = AsleepClient();
 
 final stateSubscription = asleep.states.listen((snapshot) {
   print(snapshot.trackingStatus);
+  print(snapshot.isOnDeviceAnalysisEnabled);
 });
 
 final eventSubscription = asleep.events.listen((event) {
@@ -162,6 +163,13 @@ declarations directly.
 
 `AsleepSnapshot` contains durable projected state. `AsleepEvent` contains
 one-time native facts. Do not use the state stream as an event queue.
+
+`AsleepSnapshot.isOnDeviceAnalysisEnabled` is the effective upload-analysis
+policy. It becomes `true` only after `initialize()` successfully applies
+`enableOnDeviceAnalysis: true`. `configure()` and restoration preserve the
+current value; a new client therefore remains in non-ODA mode unless it first
+completes an ODA-enabled initialization. Failed setup and `dispose()` reset the
+value to `false`.
 
 `TrackingStatus.paused` and `TrackingStatus.recoveryRequired` still describe a
 live native session. On iOS, call `resumeTracking()` after the app returns to
