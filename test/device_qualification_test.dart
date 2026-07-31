@@ -506,6 +506,45 @@ void main() {
     }
   });
 
+  test('qualification workflow receives evidence only from a secret', () {
+    final workflow = File(
+      '.github/workflows/device-qualification.yml',
+    ).readAsStringSync();
+
+    expect(workflow, isNot(contains('evidence_base64')));
+    expect(workflow, isNot(contains('inputs.evidence')));
+    expect(
+      workflow,
+      contains(
+        r'EVIDENCE_JSON: ${{ secrets.DEVICE_QUALIFICATION_EVIDENCE_JSON }}',
+      ),
+    );
+    expect(workflow, contains(r'[[ -z "${EVIDENCE_JSON:-}" ]]'));
+    expect(workflow, contains('umask 077'));
+    expect(
+      workflow,
+      contains(
+        r'''printf '%s' "$EVIDENCE_JSON" > "$RUNNER_TEMP/evidence.json"''',
+      ),
+    );
+    expect(workflow, contains('retention-days: 90'));
+
+    final operatorGuide = File(
+      'doc/DEVICE_QUALIFICATION.md',
+    ).readAsStringSync();
+    expect(operatorGuide, isNot(contains('evidence_base64')));
+    expect(
+      operatorGuide,
+      contains('gh secret set DEVICE_QUALIFICATION_EVIDENCE_JSON'),
+    );
+    expect(operatorGuide, contains('< "\$secret_input"'));
+    expect(
+      operatorGuide,
+      contains('gh secret delete DEVICE_QUALIFICATION_EVIDENCE_JSON'),
+    );
+    expect(operatorGuide, contains('gh run watch "\$qualification_run_id"'));
+  });
+
   test('incomplete template shape can be checked without credentials', () {
     final evidence = _completeEvidence();
     evidence['privacy'] = <String, Object?>{

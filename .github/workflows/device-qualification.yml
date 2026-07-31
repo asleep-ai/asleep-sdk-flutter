@@ -3,10 +3,6 @@ name: Device qualification
 on:
   workflow_dispatch:
     inputs:
-      evidence_base64:
-        description: Base64-encoded, redacted qualification evidence JSON
-        required: true
-        type: string
       approval_comment_id:
         description: Same-repository issue comment approving this evidence digest
         required: true
@@ -36,11 +32,18 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
-      - name: Decode evidence
+      - name: Load evidence from temporary secret
         env:
-          EVIDENCE_BASE64: ${{ inputs.evidence_base64 }}
+          EVIDENCE_JSON: ${{ secrets.DEVICE_QUALIFICATION_EVIDENCE_JSON }}
         run: |
-          printf '%s' "$EVIDENCE_BASE64" | base64 --decode > "$RUNNER_TEMP/evidence.json"
+          set -euo pipefail
+          umask 077
+          if [[ -z "${EVIDENCE_JSON:-}" ]]; then
+            echo "Temporary qualification evidence secret is missing." >&2
+            exit 1
+          fi
+          printf '%s' "$EVIDENCE_JSON" > "$RUNNER_TEMP/evidence.json"
+          unset EVIDENCE_JSON
           jq -e . "$RUNNER_TEMP/evidence.json" > /dev/null
 
       - name: Reject prohibited sensitive data
