@@ -73,11 +73,11 @@ state management.
   into the public API; the decision and regeneration constraints are recorded
   in ADR 0002.
 
-## Remaining Decisions Before Publication
+## Publication Decisions and Follow-ups
 
-- Public source repository URL, issue tracker, support, security, and
-  documentation URLs. Private GitHub URLs are intentionally omitted from
-  public package metadata.
+- The public source repository, issue tracker, support, security, and
+  documentation routes are recorded in package metadata and repository
+  policy documents.
 - Public redistribution approval for the Dart wrapper and both native SDK
   dependency paths.
 - Final Flutter/Dart lower bounds across the intended consumer fleet.
