@@ -610,6 +610,7 @@ void _validateSensitiveEvidence(
   String path,
   List<String> errors,
 ) {
+  if (path == 'run.operator' && value is String) return;
   if (value is Map<String, Object?>) {
     for (final entry in value.entries) {
       final childPath = path.isEmpty ? entry.key : '$path.${entry.key}';

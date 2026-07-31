@@ -91,6 +91,32 @@ void main() {
     );
   });
 
+  test('bound operator names bypass only sensitive vocabulary scanning', () {
+    for (final operator in ['reporter', 'samples-team']) {
+      final evidence = _completeEvidence();
+      (evidence['run']! as Map<String, Object?>)['operator'] = operator;
+
+      expect(
+        validateDeviceQualification(
+          evidence,
+          expectations: QualificationExpectations(operator: operator),
+        ),
+        isEmpty,
+      );
+
+      _device(evidence, 'android', 'current')['model'] = operator;
+      expect(
+        validateDeviceQualification(
+          evidence,
+          expectations: QualificationExpectations(operator: operator),
+        ),
+        contains(
+          'platforms.android.devices[1].model contains prohibited sensitive data.',
+        ),
+      );
+    }
+  });
+
   test('unsupported OS capabilities block release', () {
     final evidence = _completeEvidence();
     final androidDevice = _device(evidence, 'android', 'current');
