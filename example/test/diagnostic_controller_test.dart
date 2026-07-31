@@ -187,6 +187,93 @@ void main() {
       },
     );
 
+    test(
+      'transient failures keep the recovery latch until an upload',
+      () async {
+        final platform = _FakePlatform()
+          ..restoreResult = const RestoreResult(hasActiveSession: true);
+        final controller = _controller(
+          platform,
+          hostPlatform: DiagnosticHostPlatform.ios,
+        );
+        await controller.initializeOrRestore('runtime-secret');
+        platform.emit(
+          TrackingFailedEvent(
+            error: AsleepError(
+              code: 'CANNOT_ACTIVATE_IN_BACKGROUND',
+              message: 'Foreground required',
+              category: AsleepErrorCategory.recoveryRequired,
+            ),
+          ),
+        );
+        await controller.handleLifecycleState(AppLifecycleState.resumed);
+
+        platform.emit(
+          TrackingFailedEvent(
+            error: AsleepError(
+              code: 'NETWORK_OFFLINE',
+              message: 'Retry later',
+              category: AsleepErrorCategory.transient,
+            ),
+          ),
+        );
+        expect(controller.recoveryAwaitingUpload, isTrue);
+
+        await controller.handleLifecycleState(AppLifecycleState.resumed);
+        expect(platform.resumeCount, 1);
+
+        platform.emit(const TrackingUploadedEvent(sequence: 1));
+        expect(controller.recoveryAwaitingUpload, isFalse);
+
+        await controller.close();
+      },
+    );
+
+    test(
+      'terminal and recording-dead failures release the recovery latch',
+      () async {
+        for (final category in <AsleepErrorCategory>[
+          AsleepErrorCategory.terminal,
+          AsleepErrorCategory.recordingDead,
+        ]) {
+          final platform = _FakePlatform()
+            ..restoreResult = const RestoreResult(hasActiveSession: true);
+          final controller = _controller(
+            platform,
+            hostPlatform: DiagnosticHostPlatform.ios,
+          );
+          await controller.initializeOrRestore('runtime-secret');
+          platform.emit(
+            TrackingFailedEvent(
+              error: AsleepError(
+                code: 'CANNOT_ACTIVATE_IN_BACKGROUND',
+                message: 'Foreground required',
+                category: AsleepErrorCategory.recoveryRequired,
+              ),
+            ),
+          );
+          await controller.handleLifecycleState(AppLifecycleState.resumed);
+
+          platform.emit(
+            TrackingFailedEvent(
+              error: AsleepError(
+                code: 'RECOVERY_ENDED',
+                message: 'Session ended',
+                category: category,
+              ),
+            ),
+          );
+
+          expect(
+            controller.recoveryAwaitingUpload,
+            isFalse,
+            reason: category.name,
+          );
+          await controller.close();
+        }
+      },
+    );
+
     test('does not run foreground recovery on Android', () async {
       final platform = _FakePlatform();
       final controller = _controller(platform);

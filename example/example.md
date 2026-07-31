@@ -228,6 +228,7 @@ Future<void> onAppLifecycleState(
   if (!Platform.isIOS ||
       lifecycle != AppLifecycleState.resumed ||
       resumeInFlight ||
+      awaitingRecoveryUpload ||
       (snapshot.trackingStatus != TrackingStatus.paused &&
           snapshot.trackingStatus != TrackingStatus.recoveryRequired)) {
     return;

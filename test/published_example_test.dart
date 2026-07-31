@@ -23,5 +23,9 @@ void main() {
     const publicGuide = 'https://pub.dev/packages/asleep_sdk_flutter/example';
     expect(File('README.md').readAsStringSync(), contains(publicGuide));
     expect(File('pubspec.yaml').readAsStringSync(), contains(publicGuide));
+    expect(
+      File('example/example.md').readAsStringSync(),
+      contains('awaitingRecoveryUpload ||'),
+    );
   });
 }

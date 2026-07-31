@@ -317,7 +317,10 @@ class DiagnosticController extends ChangeNotifier {
     if (event case AnalysisResultEvent(:final result)) {
       _analysisResult = result;
     }
-    if (event is TrackingFailedEvent && _recoveryAwaitingUpload) {
+    if (event case TrackingFailedEvent(:final error)
+        when _recoveryAwaitingUpload &&
+            (error.category == AsleepErrorCategory.terminal ||
+                error.category == AsleepErrorCategory.recordingDead)) {
       _recoveryAwaitingUpload = false;
     }
     _lastEvent = _safeEventLabel(event);
