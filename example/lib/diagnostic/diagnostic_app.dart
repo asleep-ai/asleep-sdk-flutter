@@ -203,8 +203,7 @@ class _DiagnosticPageState extends State<DiagnosticPage>
                     child: const Text('Recheck tracking state'),
                   ),
                   OutlinedButton(
-                    onPressed:
-                        snapshot.trackingStatus == TrackingStatus.tracking
+                    onPressed: controller.canRequestAnalysis
                         ? () => unawaited(controller.requestAnalysis())
                         : null,
                     child: const Text('Request analysis'),

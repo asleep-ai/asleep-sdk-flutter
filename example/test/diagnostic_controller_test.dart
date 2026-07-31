@@ -7,6 +7,123 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('DiagnosticController', () {
+    test('keeps Start disabled until SDK preparation fully succeeds', () async {
+      final platform = _FakePlatform()
+        ..batteryCheckCompleter = Completer<BatteryOptimizationStatus>();
+      final controller = _controller(platform);
+
+      expect(controller.sdkPrepared, isFalse);
+      expect(controller.canStartTracking, isFalse);
+      await controller.startTracking();
+      expect(platform.calls, isNot(contains('start')));
+      expect(controller.operationError, isNull);
+
+      final preparation = controller.initializeOrRestore('runtime-secret');
+      while (!platform.calls.contains('battery-check')) {
+        await Future<void>.delayed(Duration.zero);
+      }
+
+      expect(controller.sdkPreparationInFlight, isTrue);
+      expect(controller.sdkPrepared, isFalse);
+      expect(controller.canStartTracking, isFalse);
+
+      platform.batteryCheckCompleter!.complete(
+        const BatteryOptimizationStatus(exempted: true, platform: 'android'),
+      );
+      await preparation;
+
+      expect(controller.sdkPreparationInFlight, isFalse);
+      expect(controller.sdkPrepared, isTrue);
+      expect(controller.canStartTracking, isTrue);
+
+      await controller.close();
+    });
+
+    test('failed SDK preparation stays gated and can be retried', () async {
+      final platform = _FakePlatform()..setupError = StateError('setup failed');
+      final controller = _controller(platform);
+
+      await controller.initializeOrRestore('runtime-secret');
+
+      expect(controller.sdkPreparationInFlight, isFalse);
+      expect(controller.sdkPrepared, isFalse);
+      expect(controller.canStartTracking, isFalse);
+      expect(controller.operationMessage, 'Operation failed');
+
+      platform.setupError = null;
+      await controller.initializeOrRestore('runtime-secret');
+
+      expect(controller.sdkPrepared, isTrue);
+      expect(controller.canStartTracking, isTrue);
+      expect(controller.operationMessage, 'SDK ready');
+
+      await controller.close();
+    });
+
+    test('derives readiness from a fully prepared existing client', () async {
+      final platform = _FakePlatform();
+      final client = AsleepClient(platform: platform);
+      await client.initialize(
+        const AsleepSetupOptions(apiKey: 'runtime-secret'),
+      );
+      await client.checkBatteryOptimization();
+
+      final controller = DiagnosticController(
+        client: client,
+        hostPlatform: DiagnosticHostPlatform.android,
+      );
+
+      expect(controller.sdkPrepared, isTrue);
+      expect(controller.canStartTracking, isTrue);
+
+      await controller.close();
+    });
+
+    test('existing client without battery preparation remains gated', () async {
+      final platform = _FakePlatform();
+      final client = AsleepClient(platform: platform);
+      await client.initialize(
+        const AsleepSetupOptions(apiKey: 'runtime-secret'),
+      );
+
+      final controller = DiagnosticController(
+        client: client,
+        hostPlatform: DiagnosticHostPlatform.android,
+      );
+
+      expect(controller.snapshot.setupStatus, SetupStatus.complete);
+      expect(controller.sdkPrepared, isFalse);
+      expect(controller.canStartTracking, isFalse);
+
+      await controller.close();
+    });
+
+    test('recognizes a fully prepared restored client', () async {
+      final platform = _FakePlatform()
+        ..restoreResult = const RestoreResult(hasActiveSession: true);
+      final client = AsleepClient(platform: platform);
+      await client.checkAndRestoreTracking();
+      await client.configure(
+        const AsleepConfiguration(apiKey: 'runtime-secret'),
+      );
+      await client.checkBatteryOptimization();
+
+      final controller = DiagnosticController(
+        client: client,
+        hostPlatform: DiagnosticHostPlatform.android,
+      );
+
+      expect(controller.sdkPrepared, isTrue);
+      expect(controller.canStartTracking, isFalse);
+      expect(controller.canStopTracking, isTrue);
+
+      platform.emit(const TrackingClosedEvent(sessionId: 'restored-session'));
+      expect(controller.sdkPrepared, isTrue);
+      expect(controller.canStartTracking, isTrue);
+
+      await controller.close();
+    });
+
     test(
       'subscribes before restore and configures an active session',
       () async {
@@ -680,6 +797,136 @@ void main() {
           controller.operationErrorText,
           isNot(contains('secret-native-event-payload')),
         );
+
+        await controller.close();
+      },
+    );
+
+    test(
+      'shares an in-flight analysis request and preserves its outcome',
+      () async {
+        final platform = _FakePlatform()
+          ..analysisCompleter = Completer<AnalysisRequest>();
+        final controller = _controller(platform);
+        await controller.initializeOrRestore('runtime-secret');
+        platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
+
+        expect(controller.canRequestAnalysis, isTrue);
+        final first = controller.requestAnalysis();
+        final repeated = controller.requestAnalysis();
+
+        expect(identical(first, repeated), isTrue);
+        expect(controller.analysisRequestInFlight, isTrue);
+        expect(controller.canRequestAnalysis, isFalse);
+        expect(platform.calls.where((call) => call == 'analysis').length, 1);
+
+        platform.analysisCompleter!.complete(
+          const AnalysisRequest(status: AnalysisRequestStatus.requested),
+        );
+        await Future.wait(<Future<void>>[first, repeated]);
+
+        expect(controller.analysisRequestInFlight, isFalse);
+        expect(controller.snapshot.isAnalyzing, isTrue);
+        expect(controller.canRequestAnalysis, isFalse);
+        expect(controller.operationMessage, 'Analysis requested');
+        expect(controller.operationError, isNull);
+
+        final whilePending = controller.requestAnalysis();
+        await whilePending;
+        expect(platform.calls.where((call) => call == 'analysis').length, 1);
+        expect(controller.operationMessage, 'Analysis requested');
+        expect(controller.operationError, isNull);
+
+        platform.emit(
+          AnalysisResultEvent(result: AsleepAnalysisResult(id: 'event')),
+        );
+        expect(controller.canRequestAnalysis, isTrue);
+
+        await controller.close();
+      },
+    );
+
+    test('analysis failure releases the guard for retry', () async {
+      final platform = _FakePlatform()
+        ..analysisCompleter = Completer<AnalysisRequest>();
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+      platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
+
+      final failed = controller.requestAnalysis();
+      platform.analysisCompleter!.completeError(StateError('analysis failed'));
+      await failed;
+
+      expect(controller.analysisRequestInFlight, isFalse);
+      expect(controller.snapshot.isAnalyzing, isFalse);
+      expect(controller.canRequestAnalysis, isTrue);
+      expect(controller.operationMessage, 'Operation failed');
+      expect(controller.operationError, isNotNull);
+
+      platform.analysisCompleter = Completer<AnalysisRequest>();
+      final retry = controller.requestAnalysis();
+      expect(controller.analysisRequestInFlight, isTrue);
+      expect(platform.calls.where((call) => call == 'analysis').length, 2);
+      platform.analysisCompleter!.complete(
+        const AnalysisRequest(status: AnalysisRequestStatus.requested),
+      );
+      await retry;
+
+      expect(controller.operationMessage, 'Analysis requested');
+      expect(controller.operationError, isNull);
+
+      await controller.close();
+    });
+
+    test(
+      'synchronous analysis event shares the actual command future',
+      () async {
+        final platform = _FakePlatform()
+          ..analysisCompleter = Completer<AnalysisRequest>();
+        final controller = _controller(platform);
+        await controller.initializeOrRestore('runtime-secret');
+        platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
+        platform.onAnalysisRequest = () {
+          platform.emit(
+            AnalysisResultEvent(
+              result: AsleepAnalysisResult(id: 'synchronous-event'),
+            ),
+          );
+        };
+        Future<void>? reentrant;
+        var reentrantCompleted = false;
+        controller.addListener(() {
+          if (controller.analysisResult?.id == 'synchronous-event' &&
+              reentrant == null) {
+            reentrant = controller.requestAnalysis();
+            unawaited(
+              reentrant!.then((_) {
+                reentrantCompleted = true;
+              }),
+            );
+          }
+        });
+
+        final request = controller.requestAnalysis();
+
+        expect(reentrant, isNotNull);
+        expect(identical(request, reentrant), isTrue);
+        expect(controller.snapshot.isAnalyzing, isFalse);
+        expect(controller.analysisRequestInFlight, isTrue);
+        expect(controller.canRequestAnalysis, isFalse);
+        expect(platform.calls.where((call) => call == 'analysis').length, 1);
+        await Future<void>.delayed(Duration.zero);
+        expect(reentrantCompleted, isFalse);
+
+        platform.analysisCompleter!.complete(
+          const AnalysisRequest(status: AnalysisRequestStatus.requested),
+        );
+        await Future.wait(<Future<void>>[request, reentrant!]);
+
+        expect(controller.analysisRequestInFlight, isFalse);
+        expect(controller.canRequestAnalysis, isTrue);
+        expect(controller.analysisResult?.id, 'synchronous-event');
+        expect(reentrantCompleted, isTrue);
 
         await controller.close();
       },
@@ -1427,10 +1674,13 @@ class _FakePlatform implements AsleepPlatform {
   bool permissionRequestResult = true;
   Object? reportError;
   AsleepAnalysisResult? analysisResult;
+  VoidCallback? onAnalysisRequest;
   Completer<void>? loggingEnableCompleter;
   Completer<void>? resumeCompleter;
   Completer<void>? startCompleter;
   Completer<RestoreResult>? restoreCompleter;
+  Completer<BatteryOptimizationStatus>? batteryCheckCompleter;
+  Completer<AnalysisRequest>? analysisCompleter;
   Completer<void>? deleteCompleter;
   Completer<AsleepReport>? reportCompleter;
   Completer<List<AsleepSession>>? reportListCompleter;
@@ -1442,6 +1692,7 @@ class _FakePlatform implements AsleepPlatform {
   final Map<String, Completer<AsleepAverageReport>> averageReportCompleters =
       <String, Completer<AsleepAverageReport>>{};
   Object? disposeError;
+  Object? setupError;
   Object? stopError;
   bool echoSetupKeyInError = false;
   String? setupApiKey;
@@ -1461,6 +1712,9 @@ class _FakePlatform implements AsleepPlatform {
   Future<void> setup(AsleepSetupOptions options) async {
     calls.add('setup');
     setupApiKey = options.apiKey;
+    if (setupError case final error?) {
+      throw error;
+    }
     if (echoSetupKeyInError) {
       throw AsleepException(
         AsleepErrorCode.nativeFailure,
@@ -1485,7 +1739,7 @@ class _FakePlatform implements AsleepPlatform {
   @override
   Future<BatteryOptimizationStatus> checkBatteryOptimization() async {
     calls.add('battery-check');
-    return batteryStatus;
+    return await batteryCheckCompleter?.future ?? batteryStatus;
   }
 
   @override
@@ -1530,6 +1784,10 @@ class _FakePlatform implements AsleepPlatform {
   @override
   Future<AnalysisRequest> requestAnalysis() async {
     calls.add('analysis');
+    onAnalysisRequest?.call();
+    if (analysisCompleter case final completer?) {
+      return completer.future;
+    }
     return AnalysisRequest(
       status: AnalysisRequestStatus.requested,
       immediateResult: analysisResult,

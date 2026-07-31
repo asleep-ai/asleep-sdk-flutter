@@ -14,6 +14,9 @@ class DiagnosticController extends ChangeNotifier {
     required this.hostPlatform,
   }) : _client = client,
        _snapshot = client.state,
+       _sdkPrepared =
+           client.state.setupStatus == SetupStatus.complete &&
+           client.state.batteryOptimizationChecked,
        _recordingDeadCleanupRequired =
            client.state.error?.category == AsleepErrorCategory.recordingDead &&
            !client.state.didClose {
@@ -62,6 +65,9 @@ class DiagnosticController extends ChangeNotifier {
   String _lastEvent = 'No public events yet';
   bool _loggingEnabled = false;
   bool _deletionInFlight = false;
+  bool _sdkPrepared;
+  bool _sdkPreparationInFlight = false;
+  bool _analysisRequestInFlight = false;
   bool _startInFlight = false;
   int _startOutcomeGeneration = 0;
   bool _trackingRestorationRequired = false;
@@ -75,6 +81,7 @@ class DiagnosticController extends ChangeNotifier {
   int _activeOperationCount = 0;
   Completer<void>? _operationsDrained;
   Future<void>? _closeFuture;
+  Future<void>? _analysisRequestFuture;
   Future<void> _loggingTransition = Future<void>.value();
 
   AsleepSnapshot get snapshot => _snapshot;
@@ -90,6 +97,9 @@ class DiagnosticController extends ChangeNotifier {
   String get lastEvent => _lastEvent;
   bool get loggingEnabled => _loggingEnabled;
   bool get deletionInFlight => _deletionInFlight;
+  bool get sdkPrepared => _sdkPrepared;
+  bool get sdkPreparationInFlight => _sdkPreparationInFlight;
+  bool get analysisRequestInFlight => _analysisRequestInFlight;
   bool get recoveryAwaitingUpload => _recoveryAwaitingUpload;
   bool get trackingRestorationRequired => _trackingRestorationRequired;
   bool get stopAwaitingEndEvent => _stopAwaitingEndEvent;
@@ -102,9 +112,16 @@ class DiagnosticController extends ChangeNotifier {
       (_snapshot.isTracking || _startInFlight || _recordingDeadCleanupRequired);
   bool get canStartTracking =>
       !canStopTracking &&
+      _sdkPrepared &&
+      !_sdkPreparationInFlight &&
       !_stopAwaitingEndEvent &&
       !_trackingRestorationRequired &&
       !_trackingReconciliationInFlight;
+  bool get canRequestAnalysis =>
+      _sdkPrepared &&
+      _snapshot.trackingStatus == TrackingStatus.tracking &&
+      !_snapshot.isAnalyzing &&
+      !_analysisRequestInFlight;
 
   String? get operationErrorText => _safeErrorText(_operationError);
   String? get snapshotErrorText => _safeErrorText(_snapshot.error);
@@ -117,6 +134,10 @@ class DiagnosticController extends ChangeNotifier {
   /// [apiKey] remains a method-local value. This controller never persists it,
   /// places it in diagnostic state, or includes it in logs and error text.
   Future<void> initializeOrRestore(String apiKey) async {
+    if (_sdkPreparationInFlight || _closed) {
+      return;
+    }
+    _sdkPrepared = false;
     final runtimeApiKey = apiKey.trim();
     if (runtimeApiKey.isEmpty) {
       _recordLocalError(
@@ -127,22 +148,30 @@ class DiagnosticController extends ChangeNotifier {
       );
       return;
     }
-    await _run('SDK ready', () async {
-      final restore = await _client.checkAndRestoreTracking();
-      _trackingRestorationRequired = false;
-      _trackingClosePending = false;
-      if (restore.hasActiveSession) {
-        await _client.configure(AsleepConfiguration(apiKey: runtimeApiKey));
-      } else {
-        await _client.initialize(
-          AsleepSetupOptions(
-            apiKey: runtimeApiKey,
-            enableOnDeviceAnalysis: true,
-          ),
-        );
-      }
-      _batteryStatus = await _client.checkBatteryOptimization();
-    });
+    _sdkPreparationInFlight = true;
+    _notify();
+    try {
+      await _run('SDK ready', () async {
+        final restore = await _client.checkAndRestoreTracking();
+        _trackingRestorationRequired = false;
+        _trackingClosePending = false;
+        if (restore.hasActiveSession) {
+          await _client.configure(AsleepConfiguration(apiKey: runtimeApiKey));
+        } else {
+          await _client.initialize(
+            AsleepSetupOptions(
+              apiKey: runtimeApiKey,
+              enableOnDeviceAnalysis: true,
+            ),
+          );
+        }
+        _batteryStatus = await _client.checkBatteryOptimization();
+        _sdkPrepared = true;
+      });
+    } finally {
+      _sdkPreparationInFlight = false;
+      _notify();
+    }
   }
 
   Future<bool?> checkPermissions() async {
@@ -174,7 +203,7 @@ class DiagnosticController extends ChangeNotifier {
       _runValue(_client.requestBatteryOptimizationExemption);
 
   Future<void> startTracking() async {
-    if (_startInFlight || _closed) {
+    if (!canStartTracking || _closed) {
       return;
     }
     _startInFlight = true;
@@ -273,12 +302,37 @@ class DiagnosticController extends ChangeNotifier {
     }
   }
 
-  Future<void> requestAnalysis() => _run('Analysis requested', () async {
-    final request = await _client.requestAnalysis();
-    if (request.immediateResult case final result?) {
-      _analysisResult = result;
+  Future<void> requestAnalysis() {
+    final activeRequest = _analysisRequestFuture;
+    if (activeRequest != null) {
+      return activeRequest;
     }
-  });
+    if (!canRequestAnalysis || _closed) {
+      return Future<void>.value();
+    }
+    final completion = Completer<void>();
+    _analysisRequestInFlight = true;
+    _analysisRequestFuture = completion.future;
+    _notify();
+    unawaited(_requestAnalysis(completion));
+    return completion.future;
+  }
+
+  Future<void> _requestAnalysis(Completer<void> completion) async {
+    try {
+      await _run('Analysis requested', () async {
+        final request = await _client.requestAnalysis();
+        if (request.immediateResult case final result?) {
+          _analysisResult = result;
+        }
+      });
+    } finally {
+      _analysisRequestInFlight = false;
+      _analysisRequestFuture = null;
+      _notify();
+      completion.complete();
+    }
+  }
 
   Future<void> _restoreTrackingState() async {
     final restore = await _client.checkAndRestoreTracking();
@@ -518,6 +572,9 @@ class DiagnosticController extends ChangeNotifier {
 
   void _onSnapshot(AsleepSnapshot snapshot) {
     _snapshot = snapshot;
+    if (snapshot.setupStatus != SetupStatus.complete) {
+      _sdkPrepared = false;
+    }
     final sessionId = snapshot.sessionId?.trim();
     if (sessionId != null && sessionId.isNotEmpty) {
       _lastTrackedSessionId = sessionId;

@@ -7,6 +7,77 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('gates tracking actions until SDK preparation completes', (
+    tester,
+  ) async {
+    _useTallSurface(tester);
+    final platform = _WidgetFakePlatform()
+      ..batteryCheckCompleter = Completer<BatteryOptimizationStatus>();
+    final controller = DiagnosticController(
+      client: AsleepClient(platform: platform),
+      hostPlatform: DiagnosticHostPlatform.android,
+    );
+    await tester.pumpWidget(AsleepExampleApp(controller: controller));
+
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Start tracking'),
+          )
+          .onPressed,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.widgetWithText(OutlinedButton, 'Request analysis'),
+          )
+          .onPressed,
+      isNull,
+    );
+
+    final preparation = controller.initializeOrRestore('runtime-secret');
+    await tester.pump();
+    expect(controller.sdkPreparationInFlight, isTrue);
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Start tracking'),
+          )
+          .onPressed,
+      isNull,
+    );
+
+    platform.batteryCheckCompleter!.complete(
+      const BatteryOptimizationStatus(exempted: true, platform: 'android'),
+    );
+    await preparation;
+    await tester.pump();
+
+    expect(controller.sdkPrepared, isTrue);
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Start tracking'),
+          )
+          .onPressed,
+      isNotNull,
+    );
+
+    platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
+    await tester.pump();
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.widgetWithText(OutlinedButton, 'Request analysis'),
+          )
+          .onPressed,
+      isNotNull,
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('renders the complete diagnostic journey', (tester) async {
     _useTallSurface(tester);
     final platform = _WidgetFakePlatform();
@@ -447,6 +518,7 @@ class _WidgetFakePlatform implements AsleepPlatform {
   Completer<void>? deleteCompleter;
   Completer<void>? startCompleter;
   Completer<RestoreResult>? restoreCompleter;
+  Completer<BatteryOptimizationStatus>? batteryCheckCompleter;
   bool permissionsGranted = true;
   bool permissionRequestResult = true;
 
@@ -468,6 +540,7 @@ class _WidgetFakePlatform implements AsleepPlatform {
 
   @override
   Future<BatteryOptimizationStatus> checkBatteryOptimization() async =>
+      await batteryCheckCompleter?.future ??
       const BatteryOptimizationStatus(exempted: true, platform: 'android');
 
   @override
