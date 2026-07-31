@@ -146,6 +146,33 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('failed restored configure keeps Initialize enabled', (
+    tester,
+  ) async {
+    _useTallSurface(tester);
+    final platform = _WidgetFakePlatform()
+      ..restoreResult = const RestoreResult(hasActiveSession: true)
+      ..configureError = StateError('configure failed');
+    final controller = DiagnosticController(
+      client: AsleepClient(platform: platform),
+      hostPlatform: DiagnosticHostPlatform.android,
+    );
+    await controller.initializeOrRestore('runtime-secret');
+    await tester.pumpWidget(AsleepExampleApp(controller: controller));
+
+    expect(controller.canStopTracking, isTrue);
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Initialize / restore'),
+          )
+          .onPressed,
+      isNotNull,
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('renders the complete diagnostic journey', (tester) async {
     _useTallSurface(tester);
     final platform = _WidgetFakePlatform();
@@ -587,6 +614,8 @@ class _WidgetFakePlatform implements AsleepPlatform {
   Completer<void>? startCompleter;
   Completer<RestoreResult>? restoreCompleter;
   Completer<BatteryOptimizationStatus>? batteryCheckCompleter;
+  RestoreResult restoreResult = const RestoreResult(hasActiveSession: false);
+  Object? configureError;
   BatteryOptimizationStatus batteryStatus = const BatteryOptimizationStatus(
     exempted: true,
     platform: 'android',
@@ -603,12 +632,15 @@ class _WidgetFakePlatform implements AsleepPlatform {
   Future<void> setup(AsleepSetupOptions options) async {}
 
   @override
-  Future<void> configure(AsleepConfiguration configuration) async {}
+  Future<void> configure(AsleepConfiguration configuration) async {
+    if (configureError case final error?) {
+      throw error;
+    }
+  }
 
   @override
   Future<RestoreResult> checkAndRestoreTracking() async =>
-      await restoreCompleter?.future ??
-      const RestoreResult(hasActiveSession: false);
+      await restoreCompleter?.future ?? restoreResult;
 
   @override
   Future<BatteryOptimizationStatus> checkBatteryOptimization() async =>

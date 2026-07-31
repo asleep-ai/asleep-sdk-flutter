@@ -74,6 +74,7 @@ class DiagnosticController extends ChangeNotifier {
   bool _deletionInFlight = false;
   bool _sdkPrepared;
   bool _sdkPreparationAllowed;
+  bool _sdkConfigureRetryAllowed = false;
   bool _sdkPreparationInFlight = false;
   bool _analysisRequestInFlight = false;
   bool _startInFlight = false;
@@ -115,7 +116,10 @@ class DiagnosticController extends ChangeNotifier {
       _sdkPreparationAllowed &&
       !_sdkPrepared &&
       !_sdkPreparationInFlight &&
-      !canStopTracking &&
+      (!canStopTracking ||
+          (_sdkConfigureRetryAllowed &&
+              _snapshot.isTracking &&
+              !_recordingDeadCleanupRequired)) &&
       !_stopAwaitingEndEvent &&
       !_trackingRestorationRequired &&
       !_closed;
@@ -175,16 +179,23 @@ class DiagnosticController extends ChangeNotifier {
       return;
     }
     _sdkPreparationInFlight = true;
+    final configureRetryWasAllowed = _sdkConfigureRetryAllowed;
     _sdkPreparationAllowed = false;
     _notify();
     var prepared = false;
+    var restoreCompleted = false;
+    var restoredConfigureAttempted = false;
+    var restoredConfigureSucceeded = false;
     try {
       prepared = await _runWithOutcome('SDK ready', () async {
         final restore = await _client.checkAndRestoreTracking();
+        restoreCompleted = true;
         _trackingRestorationRequired = false;
         _trackingClosePending = false;
         if (restore.hasActiveSession) {
+          restoredConfigureAttempted = true;
           await _client.configure(AsleepConfiguration(apiKey: runtimeApiKey));
+          restoredConfigureSucceeded = true;
         } else {
           await _client.initialize(
             AsleepSetupOptions(
@@ -198,6 +209,17 @@ class DiagnosticController extends ChangeNotifier {
       });
     } finally {
       _sdkPreparationAllowed = !prepared;
+      if (prepared) {
+        _sdkConfigureRetryAllowed = false;
+      } else if (restoreCompleted) {
+        _sdkConfigureRetryAllowed =
+            restoredConfigureAttempted && !restoredConfigureSucceeded;
+      } else {
+        _sdkConfigureRetryAllowed =
+            configureRetryWasAllowed &&
+            _snapshot.isTracking &&
+            !_recordingDeadCleanupRequired;
+      }
       _sdkPreparationInFlight = false;
       _notify();
     }
@@ -224,6 +246,9 @@ class DiagnosticController extends ChangeNotifier {
   Future<void> recheckBatteryOptimization() async {
     await _run('Battery status refreshed', () async {
       _batteryStatus = await _client.checkBatteryOptimization();
+      if (_client.state.setupStatus == SetupStatus.complete) {
+        _sdkPrepared = true;
+      }
     });
   }
 
@@ -262,6 +287,17 @@ class DiagnosticController extends ChangeNotifier {
             if (error.code == AsleepErrorCode.permissionRequired) {
               _permissionsGranted = false;
             }
+            if (hostPlatform == DiagnosticHostPlatform.android &&
+                error.code == AsleepErrorCode.invalidState) {
+              _batteryStatus = null;
+              _startInFlight = false;
+              _notify();
+              try {
+                _batteryStatus = await _client.checkBatteryOptimization();
+              } catch (_) {
+                _batteryStatus = null;
+              }
+            }
             if (error.nativeCode == 'TRACKING_START_TIMEOUT') {
               _trackingRestorationRequired = true;
               _trackingClosePending = false;
@@ -281,7 +317,7 @@ class DiagnosticController extends ChangeNotifier {
   Future<void> resumeTracking() => _resumeForForeground();
 
   Future<void> stopTracking() async {
-    if (_stopAwaitingEndEvent || _closed) {
+    if (!canStopTracking || _closed) {
       return;
     }
     final mustReconcile = _startInFlight;
@@ -373,7 +409,9 @@ class DiagnosticController extends ChangeNotifier {
     final restore = await _client.checkAndRestoreTracking();
     _trackingRestorationRequired = false;
     _trackingClosePending = false;
-    _operationMessage = restore.hasActiveSession
+    _operationMessage = _recordingDeadCleanupRequired
+        ? 'Recording cleanup required'
+        : restore.hasActiveSession
         ? 'Active tracking restored'
         : 'Tracking stopped';
     _releaseStopAwaitingWithoutEndEventIfSettled();
@@ -634,11 +672,14 @@ class DiagnosticController extends ChangeNotifier {
       _permissionsGranted = false;
     }
     if (event is TrackingClosedEvent) {
+      final completedRecordingCleanup = _recordingDeadCleanupRequired;
       _recordingDeadCleanupRequired = false;
       if (_recoveryAwaitingUpload) {
         _recoveryAwaitingUpload = false;
       }
-      _handleTrackingEnded();
+      _handleTrackingEnded(
+        completedRecordingCleanup: completedRecordingCleanup,
+      );
     }
     if (event case AnalysisResultEvent(:final result)) {
       _analysisResult = result;
@@ -655,6 +696,9 @@ class DiagnosticController extends ChangeNotifier {
       _recoveryAwaitingUpload = false;
     }
     if (event case TrackingFailedEvent(:final error)) {
+      final completedRecordingCleanup =
+          error.category == AsleepErrorCategory.terminal &&
+          _recordingDeadCleanupRequired;
       if (error.category == AsleepErrorCategory.recordingDead) {
         _recordingDeadCleanupRequired = true;
       } else if (error.category == AsleepErrorCategory.terminal) {
@@ -662,18 +706,29 @@ class DiagnosticController extends ChangeNotifier {
       }
       if (error.category == AsleepErrorCategory.terminal ||
           error.category == AsleepErrorCategory.recordingDead) {
-        _handleTrackingEnded();
+        _handleTrackingEnded(
+          recordingCleanupRequired:
+              error.category == AsleepErrorCategory.recordingDead,
+          completedRecordingCleanup: completedRecordingCleanup,
+        );
       }
     }
     _lastEvent = _safeEventLabel(event);
     _notify();
   }
 
-  void _handleTrackingEnded() {
+  void _handleTrackingEnded({
+    bool recordingCleanupRequired = false,
+    bool completedRecordingCleanup = false,
+  }) {
     final completedPendingStop = _stopAwaitingEndEvent;
     _stopAwaitingEndEvent = false;
     if (!_trackingRestorationRequired || !_trackingClosePending) {
       if (completedPendingStop) {
+        _operationMessage = recordingCleanupRequired
+            ? 'Recording cleanup required'
+            : 'Tracking stopped';
+      } else if (completedRecordingCleanup) {
         _operationMessage = 'Tracking stopped';
       }
       return;

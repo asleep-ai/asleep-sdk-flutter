@@ -61,6 +61,102 @@ void main() {
       await controller.close();
     });
 
+    test(
+      'failed restored-session configure remains directly retryable',
+      () async {
+        final platform = _FakePlatform()
+          ..restoreResult = const RestoreResult(hasActiveSession: true)
+          ..configureError = StateError('configure failed');
+        final controller = _controller(platform);
+
+        await controller.initializeOrRestore('first-runtime-secret');
+
+        expect(controller.sdkPrepared, isFalse);
+        expect(controller.canStopTracking, isTrue);
+        expect(controller.canPrepareSdk, isTrue);
+        expect(controller.operationMessage, 'Operation failed');
+
+        platform.configureError = null;
+        await controller.initializeOrRestore('second-runtime-secret');
+
+        expect(platform.calls.where((call) => call == 'configure').length, 2);
+        expect(platform.configuredApiKey, 'second-runtime-secret');
+        expect(controller.sdkPrepared, isTrue);
+        expect(controller.canPrepareSdk, isFalse);
+        expect(controller.canStopTracking, isTrue);
+        expect(controller.operationMessage, 'SDK ready');
+
+        await controller.close();
+      },
+    );
+
+    test(
+      'restored configure retry survives a transient restore failure',
+      () async {
+        final platform = _FakePlatform()
+          ..restoreResult = const RestoreResult(hasActiveSession: true)
+          ..configureError = StateError('configure failed');
+        final controller = _controller(platform);
+
+        await controller.initializeOrRestore('first-runtime-secret');
+        expect(controller.canPrepareSdk, isTrue);
+
+        platform
+          ..configureError = null
+          ..restoreError = StateError('restore failed');
+        await controller.initializeOrRestore('second-runtime-secret');
+
+        expect(controller.sdkPrepared, isFalse);
+        expect(controller.canStopTracking, isTrue);
+        expect(controller.canPrepareSdk, isTrue);
+        expect(platform.calls.where((call) => call == 'configure').length, 1);
+
+        platform.restoreError = null;
+        await controller.initializeOrRestore('third-runtime-secret');
+
+        expect(platform.calls.where((call) => call == 'configure').length, 2);
+        expect(platform.configuredApiKey, 'third-runtime-secret');
+        expect(controller.sdkPrepared, isTrue);
+        expect(controller.canPrepareSdk, isFalse);
+        expect(controller.operationMessage, 'SDK ready');
+
+        await controller.close();
+      },
+    );
+
+    test(
+      'battery recheck completes readiness after restored configure succeeds',
+      () async {
+        final platform = _FakePlatform()
+          ..restoreResult = const RestoreResult(hasActiveSession: true)
+          ..batteryCheckError = StateError('battery check failed');
+        final controller = _controller(platform);
+
+        await controller.initializeOrRestore('runtime-secret');
+
+        expect(controller.snapshot.setupStatus, SetupStatus.complete);
+        expect(controller.sdkPrepared, isFalse);
+        expect(controller.canPrepareSdk, isFalse);
+        expect(controller.canStopTracking, isTrue);
+        expect(controller.canRequestAnalysis, isFalse);
+        expect(controller.operationMessage, 'Operation failed');
+        expect(platform.calls.where((call) => call == 'configure').length, 1);
+
+        platform.batteryCheckError = null;
+        await controller.recheckBatteryOptimization();
+
+        expect(controller.sdkPrepared, isTrue);
+        expect(controller.batteryStatus?.exempted, isTrue);
+        expect(controller.canPrepareSdk, isFalse);
+        expect(controller.canStopTracking, isTrue);
+        expect(controller.canRequestAnalysis, isTrue);
+        expect(controller.operationMessage, 'Battery status refreshed');
+        expect(platform.calls.where((call) => call == 'configure').length, 1);
+
+        await controller.close();
+      },
+    );
+
     test('completed SDK preparation ignores repeated preparation', () async {
       final platform = _FakePlatform();
       final controller = _controller(platform);
@@ -305,6 +401,98 @@ void main() {
       },
     );
 
+    test(
+      'revoked Android exemption gates repeated Start until recheck',
+      () async {
+        final platform = _FakePlatform();
+        final controller = _controller(platform);
+        await controller.initializeOrRestore('runtime-secret');
+        expect(controller.canStartTracking, isTrue);
+
+        platform.batteryStatus = const BatteryOptimizationStatus(
+          exempted: false,
+          platform: 'android',
+        );
+        await controller.startTracking();
+
+        expect(controller.batteryStatus?.exempted, isFalse);
+        expect(controller.canStartTracking, isFalse);
+        expect(controller.operationError?.code, 'invalidState');
+        expect(controller.operationMessage, 'Operation failed');
+        expect(platform.calls.where((call) => call == 'start'), isEmpty);
+        final callsAfterRevocation = List<String>.of(platform.calls);
+        final revocationError = controller.operationError;
+
+        await controller.startTracking();
+
+        expect(platform.calls, callsAfterRevocation);
+        expect(controller.operationError, same(revocationError));
+        expect(controller.operationMessage, 'Operation failed');
+
+        platform.batteryStatus = const BatteryOptimizationStatus(
+          exempted: true,
+          platform: 'android',
+        );
+        await controller.recheckBatteryOptimization();
+
+        expect(controller.canStartTracking, isTrue);
+
+        await controller.close();
+      },
+    );
+
+    test(
+      'battery refresh after rejected Start cannot be stopped as in-flight',
+      () async {
+        final platform = _FakePlatform();
+        final controller = _controller(platform);
+        await controller.initializeOrRestore('runtime-secret');
+        final preflight = Completer<BatteryOptimizationStatus>();
+        final refresh = Completer<BatteryOptimizationStatus>();
+        platform.batteryCheckQueue.addAll(
+          <Completer<BatteryOptimizationStatus>>[preflight, refresh],
+        );
+        final batteryChecksBefore = platform.calls
+            .where((call) => call == 'battery-check')
+            .length;
+
+        final start = controller.startTracking();
+        await Future<void>.delayed(Duration.zero);
+        preflight.complete(
+          const BatteryOptimizationStatus(exempted: false, platform: 'android'),
+        );
+        while (platform.calls.where((call) => call == 'battery-check').length <
+            batteryChecksBefore + 2) {
+          await Future<void>.delayed(Duration.zero);
+        }
+
+        expect(controller.canStartTracking, isFalse);
+        expect(controller.canStopTracking, isFalse);
+        expect(controller.batteryStatus, isNull);
+        final callsDuringRefresh = List<String>.of(platform.calls);
+        await controller.stopTracking();
+        expect(platform.calls, callsDuringRefresh);
+        expect(controller.trackingRestorationRequired, isFalse);
+
+        refresh.complete(
+          const BatteryOptimizationStatus(exempted: false, platform: 'android'),
+        );
+        await start;
+
+        expect(controller.batteryStatus?.exempted, isFalse);
+        expect(controller.canStartTracking, isFalse);
+        expect(controller.canStopTracking, isFalse);
+        expect(controller.trackingRestorationRequired, isFalse);
+        expect(controller.operationMessage, 'Operation failed');
+        expect(
+          controller.operationError?.message,
+          contains('Battery optimization exemption is required'),
+        );
+
+        await controller.close();
+      },
+    );
+
     test('iOS Start does not require an Android battery exemption', () async {
       final platform = _FakePlatform()
         ..batteryStatus = const BatteryOptimizationStatus(
@@ -506,12 +694,94 @@ void main() {
       },
     );
 
-    for (final category in <AsleepErrorCategory>[
-      AsleepErrorCategory.terminal,
-      AsleepErrorCategory.recordingDead,
-    ]) {
+    test('terminal lifecycle failure completes a pending Stop', () async {
+      final platform = _FakePlatform();
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+      platform.emit(const TrackingCreatedEvent(sessionId: 'session-created'));
+
+      await controller.stopTracking();
+
+      expect(controller.stopAwaitingEndEvent, isTrue);
+      expect(
+        controller.operationMessage,
+        'Tracking stop requested; waiting for close',
+      );
+
+      platform.emit(
+        TrackingFailedEvent(
+          error: AsleepError(
+            code: 'TRACKING_ENDED',
+            message: 'Tracking ended',
+            category: AsleepErrorCategory.terminal,
+          ),
+        ),
+      );
+
+      expect(controller.stopAwaitingEndEvent, isFalse);
+      expect(controller.operationMessage, 'Tracking stopped');
+      expect(controller.operationError, isNull);
+
+      await controller.close();
+    });
+
+    test('recording-dead failure requires cleanup Stop before close', () async {
+      final platform = _FakePlatform();
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+      platform.emit(const TrackingCreatedEvent(sessionId: 'session-created'));
+      await controller.stopTracking();
+      final recordingDead = TrackingFailedEvent(
+        error: AsleepError(
+          code: 'AUDIO_INITIALIZATION_FAILED',
+          message: 'Recording stopped',
+          category: AsleepErrorCategory.recordingDead,
+        ),
+      );
+
+      platform.emit(recordingDead);
+
+      expect(controller.stopAwaitingEndEvent, isFalse);
+      expect(controller.canStopTracking, isTrue);
+      expect(controller.canStartTracking, isFalse);
+      expect(controller.operationMessage, 'Recording cleanup required');
+      final startCalls = platform.calls.where((call) => call == 'start').length;
+      await controller.startTracking();
+      expect(
+        platform.calls.where((call) => call == 'start').length,
+        startCalls,
+      );
+      expect(controller.operationMessage, 'Recording cleanup required');
+
+      await controller.stopTracking();
+
+      expect(controller.stopAwaitingEndEvent, isTrue);
+      expect(controller.canStopTracking, isFalse);
+      expect(
+        controller.operationMessage,
+        'Tracking stop requested; waiting for close',
+      );
+      final stopCalls = platform.calls.where((call) => call == 'stop').length;
+      await controller.stopTracking();
+      expect(platform.calls.where((call) => call == 'stop').length, stopCalls);
+      expect(
+        controller.operationMessage,
+        'Tracking stop requested; waiting for close',
+      );
+
+      platform.emit(const TrackingClosedEvent(sessionId: 'session-created'));
+
+      expect(controller.stopAwaitingEndEvent, isFalse);
+      expect(controller.canStopTracking, isFalse);
+      expect(controller.canStartTracking, isTrue);
+      expect(controller.operationMessage, 'Tracking stopped');
+
+      await controller.close();
+    });
+
+    for (final completion in <String>['closed', 'terminal']) {
       test(
-        '${category.name} lifecycle failure completes a pending Stop',
+        '$completion proof completes recording cleanup without another Stop',
         () async {
           final platform = _FakePlatform();
           final controller = _controller(platform);
@@ -519,28 +789,41 @@ void main() {
           platform.emit(
             const TrackingCreatedEvent(sessionId: 'session-created'),
           );
-
           await controller.stopTracking();
-
-          expect(controller.stopAwaitingEndEvent, isTrue);
-          expect(
-            controller.operationMessage,
-            'Tracking stop requested; waiting for close',
-          );
-
           platform.emit(
             TrackingFailedEvent(
               error: AsleepError(
-                code: 'TRACKING_ENDED',
-                message: 'Tracking ended',
-                category: category,
+                code: 'AUDIO_INITIALIZATION_FAILED',
+                message: 'Recording stopped',
+                category: AsleepErrorCategory.recordingDead,
               ),
             ),
           );
 
+          expect(controller.canStopTracking, isTrue);
+          expect(controller.canStartTracking, isFalse);
+          expect(controller.operationMessage, 'Recording cleanup required');
+
+          if (completion == 'closed') {
+            platform.emit(
+              const TrackingClosedEvent(sessionId: 'session-created'),
+            );
+          } else {
+            platform.emit(
+              TrackingFailedEvent(
+                error: AsleepError(
+                  code: 'TRACKING_ENDED',
+                  message: 'Tracking ended',
+                  category: AsleepErrorCategory.terminal,
+                ),
+              ),
+            );
+          }
+
           expect(controller.stopAwaitingEndEvent, isFalse);
+          expect(controller.canStopTracking, isFalse);
+          expect(controller.canStartTracking, isTrue);
           expect(controller.operationMessage, 'Tracking stopped');
-          expect(controller.operationError, isNull);
 
           await controller.close();
         },
@@ -1980,6 +2263,9 @@ class _FakePlatform implements AsleepPlatform {
   Completer<void>? startCompleter;
   Completer<RestoreResult>? restoreCompleter;
   Completer<BatteryOptimizationStatus>? batteryCheckCompleter;
+  final List<Completer<BatteryOptimizationStatus>> batteryCheckQueue =
+      <Completer<BatteryOptimizationStatus>>[];
+  Object? batteryCheckError;
   Completer<AnalysisRequest>? analysisCompleter;
   Completer<void>? deleteCompleter;
   Completer<AsleepReport>? reportCompleter;
@@ -1993,6 +2279,8 @@ class _FakePlatform implements AsleepPlatform {
       <String, Completer<AsleepAverageReport>>{};
   Object? disposeError;
   Object? setupError;
+  Object? configureError;
+  Object? restoreError;
   Object? startError;
   Object? stopError;
   bool echoSetupKeyInError = false;
@@ -2029,17 +2317,29 @@ class _FakePlatform implements AsleepPlatform {
   Future<void> configure(AsleepConfiguration configuration) async {
     calls.add('configure');
     configuredApiKey = configuration.apiKey;
+    if (configureError case final error?) {
+      throw error;
+    }
   }
 
   @override
   Future<RestoreResult> checkAndRestoreTracking() async {
     calls.add('restore');
+    if (restoreError case final error?) {
+      throw error;
+    }
     return await restoreCompleter?.future ?? restoreResult;
   }
 
   @override
   Future<BatteryOptimizationStatus> checkBatteryOptimization() async {
     calls.add('battery-check');
+    if (batteryCheckQueue.isNotEmpty) {
+      return batteryCheckQueue.removeAt(0).future;
+    }
+    if (batteryCheckError case final error?) {
+      throw error;
+    }
     return await batteryCheckCompleter?.future ?? batteryStatus;
   }
 
