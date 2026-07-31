@@ -197,11 +197,68 @@ void main() {
     );
   });
 
-  test('credentials and raw samples in notes block release', () {
+  test('sensitive data classes in notes block release', () {
+    for (final notes in <String>[
+      'apiKey=SECRET; samples: [0.1]',
+      'userId=patient-123',
+      'sessionId=session-123',
+      'report={"sleepScore":82}',
+    ]) {
+      final evidence = _completeEvidence();
+      (_scenarios(evidence, 'android')['full_night_session']!
+              as Map<String, Object?>)['notes'] =
+          notes;
+
+      expect(
+        validateDeviceQualification(
+          evidence,
+          expectations: _expectations,
+          now: DateTime.utc(2026, 8),
+        ),
+        contains(
+          contains(
+            'full_night_session.notes contains prohibited sensitive data',
+          ),
+        ),
+        reason: notes,
+      );
+    }
+  });
+
+  test('free-form notes fail closed while canonical redacted prose passes', () {
     final evidence = _completeEvidence();
-    (_scenarios(evidence, 'android')['full_night_session']!
-            as Map<String, Object?>)['notes'] =
-        'apiKey=SECRET; samples: [0.1]';
+    final scenario =
+        _scenarios(evidence, 'android')['full_night_session']!
+            as Map<String, Object?>;
+    scenario['notes'] = 'Microphone recovery passed.';
+    expect(
+      validateDeviceQualification(
+        evidence,
+        expectations: _expectations,
+        now: DateTime.utc(2026, 8),
+      ),
+      contains(contains('notes must be empty or the canonical redacted')),
+    );
+
+    scenario['notes'] = 'Passed with redacted evidence.';
+    expect(
+      validateDeviceQualification(
+        evidence,
+        expectations: _expectations,
+        now: DateTime.utc(2026, 8),
+      ),
+      isEmpty,
+    );
+  });
+
+  test('sensitive values and field names cannot move to sibling fields', () {
+    final evidence = _completeEvidence();
+    _device(evidence, 'android', 'current')['model'] = 'userId=patient-123';
+    (_scenarios(evidence, 'ios')['full_night_session']!
+        as Map<String, Object?>)['evidence'] = <Object?>[
+      'https://example.com/report/sleepScore',
+    ];
+    (evidence['privacy']! as Map<String, Object?>)['sessionId'] = 'hidden';
 
     expect(
       validateDeviceQualification(
@@ -209,8 +266,33 @@ void main() {
         expectations: _expectations,
         now: DateTime.utc(2026, 8),
       ),
-      contains(contains('notes must not contain sensitive data')),
+      containsAll(<dynamic>[
+        contains('platforms.android.devices[1].model contains prohibited'),
+        contains(
+          'platforms.ios.scenarios.full_night_session.evidence[0] '
+          'contains prohibited',
+        ),
+        contains('privacy contains a prohibited sensitive-data field'),
+      ]),
     );
+  });
+
+  test('validation errors never echo rejected evidence values', () {
+    final evidence = _completeEvidence();
+    const sensitiveValue = 'userId=patient-123';
+    _candidate(evidence)['packageVersion'] = sensitiveValue;
+    (evidence['privacy']! as Map<String, Object?>)[sensitiveValue] =
+        'report={"sleepScore":82}';
+
+    final output = validateDeviceQualification(
+      evidence,
+      expectations: _expectations,
+      now: DateTime.utc(2026, 8),
+    ).join('\n');
+
+    expect(output, isNot(contains('patient-123')));
+    expect(output, isNot(contains('sleepScore')));
+    expect(output, isNot(contains('82')));
   });
 
   test('out-of-order and future timestamps block release', () {
@@ -255,6 +337,7 @@ void main() {
         entry['status'] = 'not_run';
         entry['completedAt'] = null;
         entry['evidence'] = <Object?>[];
+        entry['notes'] = '';
       }
     }
 
@@ -284,7 +367,7 @@ Map<String, Object?> _completeEvidence() {
     'status': 'passed',
     'completedAt': '2026-07-31T01:00:00Z',
     'evidence': <Object?>['https://github.com/asleep-ai/evidence/1'],
-    'notes': 'Redacted diagnostic log.',
+    'notes': 'Passed with redacted evidence.',
     'deviceRoles': <Object?>['current'],
   };
 

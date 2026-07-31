@@ -185,7 +185,15 @@
           "uniqueItems": true,
           "items": { "type": "string", "format": "uri", "pattern": "^https://" }
         },
-        "notes": { "type": "string" },
+        "notes": {
+          "enum": [
+            "",
+            "Passed with redacted evidence.",
+            "Failed with redacted evidence.",
+            "Blocked without retaining sensitive data.",
+            "Not run."
+          ]
+        },
         "deviceRoles": {
           "type": "array",
           "uniqueItems": true,

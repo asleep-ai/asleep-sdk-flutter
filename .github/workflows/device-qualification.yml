@@ -43,13 +43,27 @@ jobs:
           printf '%s' "$EVIDENCE_BASE64" | base64 --decode > "$RUNNER_TEMP/evidence.json"
           jq -e . "$RUNNER_TEMP/evidence.json" > /dev/null
 
-      - name: Reject credentials and raw sleep data
+      - name: Reject prohibited sensitive data
         run: |
           set -euo pipefail
+          if jq -e '
+            [
+              .. | objects | keys[] |
+              gsub("[[:space:]_-]"; "") | ascii_downcase |
+              select(
+                test(
+                  "^(apikey|accesstoken|authorization|audiosamples|audiodata|samples|sleepstages|rawdata|userid|useridentifier|sessionid|sessionidentifier|patientid|patientidentifier|subjectid|subjectidentifier|accountid|accountidentifier|report|reports|sleepscore)([:=].*)?$"
+                )
+              )
+            ] | length > 0
+          ' "$RUNNER_TEMP/evidence.json" > /dev/null; then
+            echo "Evidence contains prohibited sensitive data." >&2
+            exit 1
+          fi
           if rg --quiet -i \
-            'api[ _-]?key|access[ _-]?token|authorization|bearer[[:space:]]+[A-Za-z0-9._-]+|audio[ _-]?(samples|data)[[:space:]]*[:=]|samples[[:space:]]*[:=]|sleep[ _-]?stages[[:space:]]*[:=]|raw[ _-]?data[[:space:]]*[:=]' \
-            "$RUNNER_TEMP/evidence.json"; then
-            echo "Evidence contains a credential field or raw sleep-data field." >&2
+            'api[[:space:]_-]?key|access[[:space:]_-]?token|authorization|bearer([[:space:]]|%20)+[A-Za-z0-9._-]+|audio[[:space:]_-]?(samples|data)|samples|sleep[[:space:]_-]?stages|raw[[:space:]_-]?data|(user|session|patient|subject|account)[[:space:]_-]?(id|identifier)|sleep[[:space:]_-]?score|reports?' \
+            < <(jq -r '.. | strings' "$RUNNER_TEMP/evidence.json"); then
+            echo "Evidence contains prohibited sensitive data." >&2
             exit 1
           fi
 

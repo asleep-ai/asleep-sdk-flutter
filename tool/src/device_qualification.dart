@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 const androidQualificationScenarios = <String>{
   'cold_start_without_permissions',
   'permission_denial_and_regrant',
@@ -20,6 +18,47 @@ const iosQualificationScenarios = <String>{
   'analysis_ack_and_event',
   'stop_and_report',
   'full_night_session',
+};
+
+const qualificationStatusNotes = <String, String>{
+  'passed': 'Passed with redacted evidence.',
+  'failed': 'Failed with redacted evidence.',
+  'blocked': 'Blocked without retaining sensitive data.',
+  'not_run': 'Not run.',
+};
+
+final _prohibitedEvidenceValue = RegExp(
+  r'api[\s_-]?key|access[\s_-]?token|authorization|'
+  r'bearer(?:\s|%20)+[A-Za-z0-9._-]+|'
+  r'audio[\s_-]?(?:samples|data)|samples|sleep[\s_-]?stages|'
+  r'raw[\s_-]?data|'
+  r'(?:user|session|patient|subject|account)[\s_-]?'
+  r'(?:id|identifier)|sleep[\s_-]?score|reports?',
+  caseSensitive: false,
+);
+
+const _prohibitedEvidenceKeys = <String>{
+  'apikey',
+  'accesstoken',
+  'authorization',
+  'audiosamples',
+  'audiodata',
+  'samples',
+  'sleepstages',
+  'rawdata',
+  'userid',
+  'useridentifier',
+  'sessionid',
+  'sessionidentifier',
+  'patientid',
+  'patientidentifier',
+  'subjectid',
+  'subjectidentifier',
+  'accountid',
+  'accountidentifier',
+  'report',
+  'reports',
+  'sleepscore',
 };
 
 class QualificationExpectations {
@@ -52,6 +91,7 @@ List<String> validateDeviceQualification(
   if (input is! Map<String, Object?>) {
     return ['Evidence must be a JSON object.'];
   }
+  _validateSensitiveEvidence(input, '', errors);
   _validateObject(input, '', {
     'schemaVersion',
     'candidate',
@@ -115,7 +155,7 @@ List<String> validateDeviceQualification(
     if (expected == null) return;
     final actual = _at(input, path);
     if (actual != expected) {
-      errors.add('$path must equal "$expected"; found ${jsonEncode(actual)}.');
+      errors.add('$path must equal "$expected".');
     }
   }
 
@@ -344,15 +384,23 @@ void _validatePlatform(
     );
     _requireString(scenario, 'notes', '$scenarioPath.notes', errors);
     final notes = scenario['notes'];
-    if (notes is String &&
-        RegExp(
-          r'api[\s_-]?key|access[\s_-]?token|authorization|'
-          r'bearer\s+[A-Za-z0-9._-]+|'
-          r'(?:audio[\s_-]?(?:samples|data)|samples|sleep[\s_-]?stages|'
-          r'raw[\s_-]?data)\s*[:=]',
-          caseSensitive: false,
-        ).hasMatch(notes)) {
-      errors.add('$scenarioPath.notes must not contain sensitive data.');
+    final status = scenario['status'];
+    if (notes is String) {
+      final expectedNote = status is String
+          ? qualificationStatusNotes[status]
+          : null;
+      final noteIsAllowed =
+          notes.isEmpty || (expectedNote != null && notes == expectedNote);
+      if (!noteIsAllowed) {
+        errors.add(
+          '$scenarioPath.notes must be empty or the canonical redacted '
+          'status note.',
+        );
+      } else if (!allowIncomplete && notes != expectedNote) {
+        errors.add(
+          '$scenarioPath.notes must equal the canonical redacted status note.',
+        );
+      }
     }
     final roles = scenario['deviceRoles'];
     if (roles is! List<Object?> ||
@@ -384,7 +432,6 @@ void _validatePlatform(
         );
       }
     }
-    final status = scenario['status'];
     if (!{'passed', 'failed', 'blocked', 'not_run'}.contains(status)) {
       errors.add('$scenarioPath.status is invalid.');
     } else if (!allowIncomplete && status != 'passed') {
@@ -425,6 +472,46 @@ void _validatePlatform(
   if (!allowIncomplete &&
       !usedDeviceRoles.containsAll({'minimum', 'current'})) {
     errors.add('$base scenarios must cover minimum and current device roles.');
+  }
+}
+
+void _validateSensitiveEvidence(
+  Object? value,
+  String path,
+  List<String> errors,
+) {
+  if (value is Map<String, Object?>) {
+    for (final entry in value.entries) {
+      final childPath = path.isEmpty ? entry.key : '$path.${entry.key}';
+      final normalizedKey = entry.key
+          .replaceAll(RegExp(r'[\s_-]'), '')
+          .toLowerCase();
+      final keyLabel = normalizedKey.split(RegExp(r'[:=]')).first;
+      final keyIsSensitive = _prohibitedEvidenceKeys.contains(keyLabel);
+      if (keyIsSensitive) {
+        errors.add(
+          '${path.isEmpty ? 'Evidence' : path} contains a prohibited '
+          'sensitive-data field.',
+        );
+      }
+      _validateSensitiveEvidence(
+        entry.value,
+        keyIsSensitive
+            ? '${path.isEmpty ? 'Evidence' : path}.<redacted>'
+            : childPath,
+        errors,
+      );
+    }
+    return;
+  }
+  if (value is List<Object?>) {
+    for (var index = 0; index < value.length; index++) {
+      _validateSensitiveEvidence(value[index], '$path[$index]', errors);
+    }
+    return;
+  }
+  if (value is String && _prohibitedEvidenceValue.hasMatch(value)) {
+    errors.add('$path contains prohibited sensitive data.');
   }
 }
 
@@ -504,10 +591,7 @@ void _validateObject(
   }
   final unknown = object.keys.toSet().difference(keys);
   if (unknown.isNotEmpty) {
-    errors.add(
-      '${path.isEmpty ? 'Evidence' : path} has unknown fields: '
-      '${unknown.toList()..sort()}.',
-    );
+    errors.add('${path.isEmpty ? 'Evidence' : path} has unknown fields.');
   }
 }
 

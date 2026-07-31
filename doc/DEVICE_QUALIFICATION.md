@@ -40,6 +40,19 @@ reports, user identifiers, access tokens, or API keys. The evidence assertions
 must state that credentials were injected at runtime, were not persisted, and
 that sleep data was not retained.
 
+Scenario `notes` are fail-closed: use an empty string only while preparing
+incomplete evidence, or the exact canonical sentence for the scenario status:
+
+- `Passed with redacted evidence.`
+- `Failed with redacted evidence.`
+- `Blocked without retaining sensitive data.`
+- `Not run.`
+
+Do not add free-form prose. The validator recursively rejects credential,
+raw-data, report, sleep-score, and user/session identifier vocabulary in every
+string field, including device metadata and evidence URLs. The workflow applies
+the same quiet defense-in-depth scan without printing rejected values.
+
 ## Android procedure
 
 Run every scenario from a clean install unless the scenario explicitly tests
