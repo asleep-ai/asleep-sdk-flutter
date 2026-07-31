@@ -20,14 +20,25 @@ Flutter 0.1.0. It is not a promise of one-to-one naming compatibility.
 | `useAsleep().isODAEnabled` | `AsleepSnapshot.isOnDeviceAnalysisEnabled` | Reports the effective upload-analysis policy after successful initialization. A restored session configured by a new client defaults to non-ODA cadence. |
 | `addEventListener()` | `events.listen()` | Cancel the Dart subscription or dispose the client. |
 | `Asleep.subscribe()` | `states.listen()` | Read `state` first when the current value is needed; broadcast streams do not replay. |
-| `clearError()` | Same name | Clears only the projected Dart snapshot. |
+| `clearError()` | Same name | Clears only the projected Dart snapshot. Successful commands clear only the error that was current when they started. It is a no-op after disposal. |
 
 ## Error migration
 
-Use `AsleepError.code` for stable semantic handling and
-`AsleepError.numericCode` for native diagnostics. The Flutter bridge maps iOS
-numeric errors through `error.errorCode.code`. It does not treat Swift enum
-ordinals or `NSError.code` as stable SDK error codes.
+React Native actions throw the same `AsleepError` object stored in their state.
+Flutter retains the `AsleepException` catch type for compatibility and exposes
+that canonical object as `exception.error`. For any failure thrown by an
+`AsleepClient` command, `exception.error` is the same instance as
+`client.state.error`.
+
+Use `exception.error.code` for stable semantic handling and
+`exception.error.numericCode` for native diagnostics. The Flutter bridge maps
+iOS numeric errors through `error.errorCode.code`. It does not treat Swift enum
+ordinals or `NSError.code` as stable SDK error codes. Native case names and
+unrecognized fields remain available through `platformDetails`.
+
+Successful commands clear a pre-existing error only when no newer error arrived
+while the command was pending. A generic command failure likewise cannot
+replace a richer concurrent delegate or event-stream error.
 
 Unknown semantic codes, categories, and native fields are retained instead of
 causing exhaustive enum decoding to fail.

@@ -209,9 +209,25 @@ page, rather than silently truncating the range at 100 sessions.
 ## Error handling
 
 Public commands fail with `AsleepException` for lifecycle, validation, and
-native failures. Native command failures preserve the platform SDK code and
-details. Tracking and setup delegate failures are also projected as typed
-events and `AsleepSnapshot.error`.
+native failures. For failures thrown by `AsleepClient`, `exception.error` is
+the same `AsleepError` instance published through `AsleepSnapshot.error`.
+Handle `exception.error.code` and `exception.error.category` for semantic
+behavior, then inspect `numericCode` and `platformDetails` for native
+diagnostics. Native case names and additional details remain in
+`platformDetails`.
+
+A successful command clears the error that was present when that command
+started. It does not clear a newer delegate or event-stream error that arrived
+while the command was pending. Similarly, a generic command rejection does not
+replace a richer concurrent native event error; the richer error is published
+and included in the thrown exception. Call `clearError()` only when the
+application has acknowledged the current error. If native cleanup fails during
+`dispose()`, the final snapshot and thrown exception still share the cleanup
+error before the state stream closes. `clearError()` is an idempotent no-op
+after disposal because the state stream is already closed. That terminal
+snapshot remains immutable: commands called after disposal, and commands that
+finish after disposal, still throw structured exceptions without replacing
+the final state.
 
 Use semantic `AsleepError.code` before numeric fallback. The same numeric value
 can have different historical meanings across platforms. On iOS,

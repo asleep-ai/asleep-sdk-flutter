@@ -80,7 +80,7 @@ and
 | `isTracking` | True for every tracking status except `idle`; a recovery-required session is still live |
 | `userId` / `sessionId` | Current identifiers reported by native callbacks |
 | `analysisResult` | Most recent normalized analysis event |
-| `error` | Most recent structured `AsleepError`, or null |
+| `error` | Most recent structured `AsleepError`, or null. A failed public command throws an `AsleepException` whose `error` field references this same object. |
 | `didClose` | Whether the last observed terminal lifecycle transition closed the session |
 | `batteryOptimizationChecked` | Whether the prerequisite check has run in this client |
 

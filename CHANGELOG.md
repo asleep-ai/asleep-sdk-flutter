@@ -27,6 +27,8 @@
   without treating iOS closed-session identifiers as active sessions.
 - Preserve native SDK error codes and page report-list requests beyond the
   native 100-item page size.
+- Share one structured semantic error between failed public commands and the
+  observable snapshot without overwriting richer concurrent native errors.
 - Keep notification permission optional for tracking and make direct Android
   battery-optimization exemption a consumer opt-in.
 - Add Pigeon-generated Kotlin and Swift transport contracts, an example app,

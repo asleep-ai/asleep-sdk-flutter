@@ -43,6 +43,48 @@ void main() {
     );
   });
 
+  test('preserves structured native failure details', () async {
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    const channelName =
+        'dev.flutter.pigeon.asleep_sdk_flutter.AsleepHostApi.setLoggingEnabled';
+    final channel = BasicMessageChannel<Object?>(
+      channelName,
+      transport.AsleepHostApi.pigeonChannelCodec,
+      binaryMessenger: messenger,
+    );
+    messenger.setMockDecodedMessageHandler<Object?>(
+      channel,
+      (_) async => <Object?>[
+        'ASLEEP_SDK_ERROR',
+        'The native SDK failed.',
+        <String, Object?>{
+          'sdkCode': 23000,
+          'caseName': 'networkOffline',
+          'platform': 'ios',
+        },
+      ],
+    );
+    addTearDown(
+      () => messenger.setMockDecodedMessageHandler<Object?>(channel, null),
+    );
+    final platform = PigeonAsleepPlatform(
+      hostApi: transport.AsleepHostApi(binaryMessenger: messenger),
+    );
+
+    final exception = await captureAsleepException(
+      platform.setLoggingEnabled(true),
+    );
+
+    expect(exception.nativeCode, 'ASLEEP_SDK_ERROR');
+    expect(exception.nativeDetails, isA<Map<Object?, Object?>>());
+    final details = exception.nativeDetails! as Map<Object?, Object?>;
+    expect(details['sdkCode'], 23000);
+    expect(details['caseName'], 'networkOffline');
+    expect(details, isNot(contains('category')));
+    expect(details['platform'], 'ios');
+  });
+
   group('PigeonAsleepPlatform event transport', () {
     test(
       'cancelling the mapped stream cancels the native event stream',
@@ -213,3 +255,12 @@ final Matcher malformedPayloadException = isA<AsleepException>().having(
   'code',
   AsleepErrorCode.malformedPayload,
 );
+
+Future<AsleepException> captureAsleepException(Future<Object?> future) async {
+  try {
+    await future;
+  } on AsleepException catch (error) {
+    return error;
+  }
+  throw TestFailure('Expected AsleepException.');
+}

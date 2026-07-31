@@ -171,7 +171,7 @@ void main() {
     test('releases the restore guard after native rejection', () async {
       platform.restoreCompleter = Completer<RestoreResult>();
       final restore = client.checkAndRestoreTracking();
-      final failure = expectLater(restore, throwsStateError);
+      final failure = expectLater(restore, throwsNativeFailure);
 
       platform.restoreCompleter!.completeError(
         StateError('restore unavailable'),
@@ -286,7 +286,7 @@ void main() {
       await prepareClient(client);
       platform.startError = StateError('first start failed');
 
-      await expectLater(client.startTracking(), throwsStateError);
+      await expectLater(client.startTracking(), throwsNativeFailure);
       platform.startError = null;
       await client.startTracking();
 
@@ -315,7 +315,7 @@ void main() {
 
       final start = client.startTracking();
       await pumpEventQueue();
-      final startFailure = expectLater(start, throwsStateError);
+      final startFailure = expectLater(start, throwsNativeFailure);
 
       await client.stopTracking();
       platform.startCompleter!.completeError(StateError('start cancelled'));
@@ -482,7 +482,7 @@ void main() {
       platform.emit(const TrackingUploadedEvent(sequence: 11));
       await pumpEventQueue();
       expect(platform.analysisRequestCount, 0);
-      expect(client.state.error, isNull);
+      expect(client.state.error?.code, AsleepErrorCode.invalidState.name);
 
       platform.stopCompleter!.complete();
       await stop;
@@ -799,7 +799,7 @@ void main() {
         client.initialize(
           const AsleepSetupOptions(apiKey: 'replacement-api-key'),
         ),
-        throwsStateError,
+        throwsNativeFailure,
       );
 
       expect(client.state.setupStatus, SetupStatus.idle);
@@ -823,13 +823,22 @@ void main() {
       platform
         ..setupFailureEvent = nativeError
         ..setupError = StateError('generic host rejection');
+      final states = <AsleepSnapshot>[];
+      final subscription = client.states.listen(states.add);
 
-      await expectLater(
+      final exception = await captureAsleepException(
         client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key')),
-        throwsStateError,
       );
 
       expect(client.state.error, same(nativeError));
+      expect(exception.error, same(nativeError));
+      expect(
+        states
+            .where((state) => state.setupStatus == SetupStatus.idle)
+            .every((state) => identical(state.error, nativeError)),
+        isTrue,
+      );
+      await subscription.cancel();
     });
 
     test('blocks setup but can stop a restored session', () async {
@@ -904,7 +913,7 @@ void main() {
         client.configure(
           const AsleepConfiguration(apiKey: 'replacement-api-key'),
         ),
-        throwsStateError,
+        throwsNativeFailure,
       );
 
       expect(client.state.setupStatus, SetupStatus.idle);
@@ -964,15 +973,24 @@ void main() {
       platform
         ..configureFailureEvent = nativeError
         ..configureError = StateError('generic host rejection');
+      final states = <AsleepSnapshot>[];
+      final subscription = client.states.listen(states.add);
 
-      await expectLater(
+      final exception = await captureAsleepException(
         client.configure(
           const AsleepConfiguration(apiKey: 'replacement-api-key'),
         ),
-        throwsStateError,
       );
 
       expect(client.state.error, same(nativeError));
+      expect(exception.error, same(nativeError));
+      expect(
+        states
+            .where((state) => state.setupStatus == SetupStatus.idle)
+            .every((state) => identical(state.error, nativeError)),
+        isTrue,
+      );
+      await subscription.cancel();
     });
 
     test('rejects invalid custom URLs before invoking native setup', () async {
@@ -1042,6 +1060,802 @@ void main() {
       },
     );
 
+    test('validation failures publish the thrown structured error', () async {
+      final exception = await captureAsleepException(
+        client.initialize(const AsleepSetupOptions(apiKey: ' ')),
+      );
+
+      expect(exception.error, same(client.state.error));
+      expect(exception.error?.code, AsleepErrorCode.invalidArgument.name);
+      expect(exception.error?.message, contains('apiKey'));
+    });
+
+    for (final hasPreviousError in <bool>[false, true]) {
+      final errorCase = hasPreviousError ? 'a stale error' : 'no prior error';
+
+      test(
+        'initialize failure atomically rolls back from $errorCase',
+        () async {
+          AsleepError? previousError;
+          if (hasPreviousError) {
+            platform.loggingError = StateError('old failure');
+            await captureAsleepException(client.setLoggingEnabled(true));
+            previousError = client.state.error;
+            platform.loggingError = null;
+          }
+          platform.setupError = StateError('setup failed');
+          final states = <AsleepSnapshot>[];
+          final subscription = client.states.listen(states.add);
+
+          final exception = await captureAsleepException(
+            client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key')),
+          );
+
+          final rollbacks = states
+              .where((state) => state.setupStatus == SetupStatus.idle)
+              .toList();
+          expect(rollbacks, isNotEmpty);
+          expect(
+            rollbacks.every((state) => identical(state.error, exception.error)),
+            isTrue,
+          );
+          expect(client.state.error, same(exception.error));
+          if (previousError != null) {
+            expect(
+              rollbacks.where((state) => identical(state.error, previousError)),
+              isEmpty,
+            );
+          }
+          await subscription.cancel();
+        },
+      );
+
+      test('configure failure atomically rolls back from $errorCase', () async {
+        AsleepError? previousError;
+        if (hasPreviousError) {
+          platform.loggingError = StateError('old failure');
+          await captureAsleepException(client.setLoggingEnabled(true));
+          previousError = client.state.error;
+          platform.loggingError = null;
+        }
+        platform.configureError = StateError('configuration failed');
+        final states = <AsleepSnapshot>[];
+        final subscription = client.states.listen(states.add);
+
+        final exception = await captureAsleepException(
+          client.configure(const AsleepConfiguration(apiKey: 'test-api-key')),
+        );
+
+        final rollbacks = states
+            .where((state) => state.setupStatus == SetupStatus.idle)
+            .toList();
+        expect(rollbacks, isNotEmpty);
+        expect(
+          rollbacks.every((state) => identical(state.error, exception.error)),
+          isTrue,
+        );
+        expect(client.state.error, same(exception.error));
+        if (previousError != null) {
+          expect(
+            rollbacks.where((state) => identical(state.error, previousError)),
+            isEmpty,
+          );
+        }
+        await subscription.cancel();
+      });
+
+      test(
+        'analysis failure atomically clears pending state from $errorCase',
+        () async {
+          await prepareClient(client);
+          platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
+          AsleepError? previousError;
+          if (hasPreviousError) {
+            platform.loggingError = StateError('old failure');
+            await captureAsleepException(client.setLoggingEnabled(true));
+            previousError = client.state.error;
+            platform.loggingError = null;
+          }
+          platform.analysisError = StateError('analysis failed');
+          final states = <AsleepSnapshot>[];
+          final subscription = client.states.listen(states.add);
+
+          final exception = await captureAsleepException(
+            client.requestAnalysis(),
+          );
+
+          final rollbacks = states
+              .where((state) => !state.isAnalyzing)
+              .toList();
+          expect(rollbacks, isNotEmpty);
+          expect(
+            rollbacks.every((state) => identical(state.error, exception.error)),
+            isTrue,
+          );
+          expect(client.state.error, same(exception.error));
+          if (previousError != null) {
+            expect(
+              rollbacks.where((state) => identical(state.error, previousError)),
+              isEmpty,
+            );
+          }
+          await subscription.cancel();
+        },
+      );
+    }
+
+    test(
+      'initialize failure stays acknowledged by a synchronous listener',
+      () async {
+        platform.setupError = StateError('setup failed');
+        final acknowledgedErrors = <AsleepError>[];
+        final observedErrors = <AsleepError>[];
+        final observedCurrentErrors = <AsleepError?>[];
+        final observedClearStates = <AsleepSnapshot>[];
+        final firstSubscription = client.states.listen((state) {
+          if (state.setupStatus == SetupStatus.idle && state.error != null) {
+            acknowledgedErrors.add(state.error!);
+            client.clearError();
+          }
+        });
+        final secondSubscription = client.states.listen((state) {
+          if (state.setupStatus != SetupStatus.idle) {
+            return;
+          }
+          if (state.error case final error?) {
+            observedErrors.add(error);
+            observedCurrentErrors.add(client.state.error);
+            client.clearError();
+          } else {
+            observedClearStates.add(state);
+          }
+        });
+
+        final exception = await captureAsleepException(
+          client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key')),
+        );
+
+        expect(acknowledgedErrors, hasLength(1));
+        expect(acknowledgedErrors.single, same(exception.error));
+        expect(observedErrors, hasLength(1));
+        expect(observedErrors.single, same(exception.error));
+        expect(observedCurrentErrors, hasLength(1));
+        expect(observedCurrentErrors.single, same(exception.error));
+        expect(observedClearStates, hasLength(1));
+        expect(client.state.error, isNull);
+        await firstSubscription.cancel();
+        await secondSubscription.cancel();
+      },
+    );
+
+    test(
+      'configure failure stays acknowledged by a synchronous listener',
+      () async {
+        platform.configureError = StateError('configuration failed');
+        final acknowledgedErrors = <AsleepError>[];
+        final subscription = client.states.listen((state) {
+          if (state.setupStatus == SetupStatus.idle && state.error != null) {
+            acknowledgedErrors.add(state.error!);
+            client.clearError();
+          }
+        });
+
+        final exception = await captureAsleepException(
+          client.configure(const AsleepConfiguration(apiKey: 'test-api-key')),
+        );
+
+        expect(acknowledgedErrors, hasLength(1));
+        expect(acknowledgedErrors.single, same(exception.error));
+        expect(client.state.error, isNull);
+        await subscription.cancel();
+      },
+    );
+
+    test(
+      'analysis failure stays acknowledged by a synchronous listener',
+      () async {
+        await prepareClient(client);
+        platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
+        platform.analysisError = StateError('analysis failed');
+        final acknowledgedErrors = <AsleepError>[];
+        final subscription = client.states.listen((state) {
+          if (!state.isAnalyzing && state.error != null) {
+            acknowledgedErrors.add(state.error!);
+            client.clearError();
+          }
+        });
+
+        final exception = await captureAsleepException(
+          client.requestAnalysis(),
+        );
+
+        expect(acknowledgedErrors, hasLength(1));
+        expect(acknowledgedErrors.single, same(exception.error));
+        expect(client.state.error, isNull);
+        await subscription.cancel();
+      },
+    );
+
+    test('listener error clearing preserves a queued analysis retry', () async {
+      await prepareClient(client);
+      platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
+      platform.analysisError = StateError('analysis failed');
+      final retryCompleter = Completer<AnalysisRequest>();
+      final emissions = <AsleepSnapshot>[];
+      final retryListenerCurrentErrors = <AsleepError?>[];
+      Future<AnalysisRequest>? retry;
+      final clearSubscription = client.states.listen((state) {
+        emissions.add(state);
+        if (!state.isAnalyzing && state.error != null) {
+          client.clearError();
+        }
+      });
+      final retrySubscription = client.states.listen((state) {
+        if (!state.isAnalyzing && state.error != null && retry == null) {
+          retryListenerCurrentErrors.add(client.state.error);
+          platform.analysisError = null;
+          platform.analysisCompleter = retryCompleter;
+          retry = client.requestAnalysis();
+        }
+      });
+
+      final exception = await captureAsleepException(client.requestAnalysis());
+
+      expect(retry, isNotNull);
+      expect(retryListenerCurrentErrors, hasLength(1));
+      expect(retryListenerCurrentErrors.single, same(exception.error));
+      expect(emissions, hasLength(4));
+      expect(emissions[0].isAnalyzing, isTrue);
+      expect(emissions[0].error, isNull);
+      expect(emissions[1].isAnalyzing, isFalse);
+      expect(emissions[1].error, same(exception.error));
+      expect(emissions[2].isAnalyzing, isFalse);
+      expect(emissions[2].error, isNull);
+      expect(emissions[3].isAnalyzing, isTrue);
+      expect(emissions[3].error, isNull);
+      expect(emissions.where((state) => state.error != null), hasLength(1));
+      expect(client.state.isAnalyzing, isTrue);
+      expect(client.state.error, isNull);
+      retryCompleter.complete(
+        const AnalysisRequest(status: AnalysisRequestStatus.requested),
+      );
+      await retry;
+      await retrySubscription.cancel();
+      await clearSubscription.cancel();
+    });
+
+    test(
+      'listener error clearing composes with a reentrant native event',
+      () async {
+        await prepareClient(client);
+        platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
+        platform.analysisError = StateError('analysis failed');
+        final emissions = <AsleepSnapshot>[];
+        final eventListenerCurrentErrors = <AsleepError?>[];
+        final clearSubscription = client.states.listen((state) {
+          emissions.add(state);
+          if (!state.isAnalyzing && state.error != null) {
+            client.clearError();
+          }
+        });
+        final eventSubscription = client.states.listen((state) {
+          if (!state.isAnalyzing &&
+              state.error != null &&
+              eventListenerCurrentErrors.isEmpty) {
+            eventListenerCurrentErrors.add(client.state.error);
+            platform.emit(const TrackingInterruptedEvent());
+          }
+        });
+
+        final exception = await captureAsleepException(
+          client.requestAnalysis(),
+        );
+
+        expect(eventListenerCurrentErrors, hasLength(1));
+        expect(eventListenerCurrentErrors.single, same(exception.error));
+        expect(emissions, hasLength(4));
+        expect(emissions[1].error, same(exception.error));
+        expect(emissions[2].error, isNull);
+        expect(emissions[2].trackingStatus, TrackingStatus.tracking);
+        expect(emissions[3].error, isNull);
+        expect(emissions[3].trackingStatus, TrackingStatus.paused);
+        expect(emissions.where((state) => state.error != null), hasLength(1));
+        expect(client.state.error, isNull);
+        expect(client.state.trackingStatus, TrackingStatus.paused);
+        await clearSubscription.cancel();
+        await eventSubscription.cancel();
+      },
+    );
+
+    test('native command details are shared with the snapshot error', () async {
+      await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
+      platform.loggingError = const AsleepException(
+        AsleepErrorCode.nativeFailure,
+        'Logging failed.',
+        nativeCode: 'ASLEEP_SDK_ERROR',
+        nativeDetails: <String, Object?>{
+          'sdkCode': 23000,
+          'caseName': 'networkOffline',
+          'platform': 'ios',
+        },
+      );
+
+      final exception = await captureAsleepException(
+        client.setLoggingEnabled(true),
+      );
+
+      expect(exception.error, same(client.state.error));
+      expect(exception.nativeCode, 'ASLEEP_SDK_ERROR');
+      expect(exception.error?.code, 'NETWORK_OFFLINE');
+      expect(exception.error?.category, AsleepErrorCategory.transient);
+      expect(exception.error?.numericCode, 23000);
+      expect(exception.error?.platformDetails['caseName'], 'networkOffline');
+      expect(exception.error?.platformDetails['platform'], 'ios');
+    });
+
+    test('a richer concurrent event error wins a command failure', () async {
+      await prepareClient(client);
+      platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
+      platform.analysisCompleter = Completer<AnalysisRequest>();
+      final states = <AsleepSnapshot>[];
+      final subscription = client.states.listen(states.add);
+      final analysis = client.requestAnalysis();
+      await pumpEventQueue();
+      final eventError = AsleepError(
+        code: 'CANNOT_ACTIVATE_IN_BACKGROUND',
+        message: 'Resume in the foreground.',
+        category: AsleepErrorCategory.recoveryRequired,
+        numericCode: 21002,
+      );
+      platform.emit(TrackingFailedEvent(error: eventError));
+      platform.analysisCompleter!.completeError(StateError('generic failure'));
+
+      final exception = await captureAsleepException(analysis);
+
+      expect(client.state.error, same(eventError));
+      expect(exception.error, same(eventError));
+      expect(client.state.isAnalyzing, isFalse);
+      expect(
+        states
+            .where((state) => !state.isAnalyzing)
+            .every((state) => identical(state.error, eventError)),
+        isTrue,
+      );
+      await subscription.cancel();
+    });
+
+    test('overlapping command failures keep their own errors', () async {
+      await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
+      platform.permissionCompleter = Completer<bool>();
+      final permission = client.hasRequiredPermissions();
+
+      platform.loggingError = StateError('logging failed');
+      final loggingException = await captureAsleepException(
+        client.setLoggingEnabled(true),
+      );
+      platform.permissionCompleter!.completeError(
+        StateError('permission failed'),
+      );
+      final permissionException = await captureAsleepException(permission);
+
+      expect(loggingException.error?.message, contains('logging failed'));
+      expect(permissionException.error?.message, contains('permission failed'));
+      expect(permissionException.error, same(client.state.error));
+      expect(permissionException.error, isNot(same(loggingException.error)));
+    });
+
+    test(
+      'cleared event errors are not resurrected by command failures',
+      () async {
+        await client.initialize(
+          const AsleepSetupOptions(apiKey: 'test-api-key'),
+        );
+        final eventError = AsleepError(
+          code: 'NETWORK_OFFLINE',
+          message: 'The native event failed.',
+          category: AsleepErrorCategory.transient,
+        );
+
+        platform.permissionCompleter = Completer<bool>();
+        var permission = client.hasRequiredPermissions();
+        platform.emit(TrackingFailedEvent(error: eventError));
+        client.clearError();
+        platform.permissionCompleter!.completeError(
+          StateError('permission failed after clear'),
+        );
+
+        var exception = await captureAsleepException(permission);
+        expect(
+          exception.error?.message,
+          contains('permission failed after clear'),
+        );
+        expect(exception.error, same(client.state.error));
+        expect(exception.error, isNot(same(eventError)));
+
+        client.clearError();
+        platform.permissionCompleter = Completer<bool>();
+        permission = client.hasRequiredPermissions();
+        platform.emit(TrackingFailedEvent(error: eventError));
+        platform.emit(const UserJoinedEvent(userId: 'user-1'));
+        platform.permissionCompleter!.completeError(
+          StateError('permission failed after success event'),
+        );
+
+        exception = await captureAsleepException(permission);
+        expect(
+          exception.error?.message,
+          contains('permission failed after success event'),
+        );
+        expect(exception.error, same(client.state.error));
+        expect(exception.error, isNot(same(eventError)));
+      },
+    );
+
+    test(
+      'auxiliary command failures share one structured error instance',
+      () async {
+        await client.initialize(
+          const AsleepSetupOptions(apiKey: 'test-api-key'),
+        );
+        final failure = StateError('native command failed');
+        final cases =
+            <
+              ({
+                void Function() arrange,
+                Future<Object?> Function() invoke,
+                void Function() reset,
+              })
+            >[
+              (
+                arrange: () => platform.restoreError = failure,
+                invoke: client.checkAndRestoreTracking,
+                reset: () => platform.restoreError = null,
+              ),
+              (
+                arrange: () => platform.batteryCheckError = failure,
+                invoke: client.checkBatteryOptimization,
+                reset: () => platform.batteryCheckError = null,
+              ),
+              (
+                arrange: () => platform.batteryRequestError = failure,
+                invoke: client.requestBatteryOptimizationExemption,
+                reset: () => platform.batteryRequestError = null,
+              ),
+              (
+                arrange: () => platform.permissionCheckError = failure,
+                invoke: client.hasRequiredPermissions,
+                reset: () => platform.permissionCheckError = null,
+              ),
+              (
+                arrange: () => platform.permissionRequestError = failure,
+                invoke: client.requestRequiredPermissions,
+                reset: () => platform.permissionRequestError = null,
+              ),
+              (
+                arrange: () => platform.reportError = failure,
+                invoke: () => client.getReport('session-1'),
+                reset: () => platform.reportError = null,
+              ),
+              (
+                arrange: () => platform.reportListError = failure,
+                invoke: () => client.getReportList('2026-07-01', '2026-07-30'),
+                reset: () => platform.reportListError = null,
+              ),
+              (
+                arrange: () => platform.averageReportError = failure,
+                invoke: () =>
+                    client.getAverageReport('2026-07-01', '2026-07-30'),
+                reset: () => platform.averageReportError = null,
+              ),
+              (
+                arrange: () => platform.deleteError = failure,
+                invoke: () => client.deleteSession('session-1'),
+                reset: () => platform.deleteError = null,
+              ),
+              (
+                arrange: () => platform.loggingError = failure,
+                invoke: () => client.setLoggingEnabled(true),
+                reset: () => platform.loggingError = null,
+              ),
+            ];
+
+        for (final command in cases) {
+          command.arrange();
+          final exception = await captureAsleepException(command.invoke());
+          expect(exception.error, same(client.state.error));
+          expect(exception.error?.code, 'NATIVE_FAILURE');
+          command.reset();
+          client.clearError();
+        }
+      },
+    );
+
+    test('lifecycle failures share the snapshot error', () async {
+      await prepareClient(client);
+      platform.startError = StateError('start failed');
+      var exception = await captureAsleepException(client.startTracking());
+      expect(exception.error, same(client.state.error));
+
+      platform.startError = null;
+      client.clearError();
+      platform.emit(const TrackingCreatedEvent(sessionId: 'session-1'));
+      platform.emit(const TrackingInterruptedEvent());
+      platform.resumeError = StateError('resume failed');
+      exception = await captureAsleepException(client.resumeTracking());
+      expect(exception.error, same(client.state.error));
+
+      platform.resumeError = null;
+      client.clearError();
+      platform.stopError = StateError('stop failed');
+      exception = await captureAsleepException(client.stopTracking());
+      expect(exception.error, same(client.state.error));
+    });
+
+    test(
+      'successful commands clear only the error they started with',
+      () async {
+        await client.initialize(
+          const AsleepSetupOptions(apiKey: 'test-api-key'),
+        );
+        platform.loggingError = StateError('old failure');
+        await captureAsleepException(client.setLoggingEnabled(true));
+        final oldError = client.state.error;
+
+        platform.loggingError = null;
+        await client.setLoggingEnabled(true);
+        expect(oldError, isNotNull);
+        expect(client.state.error, isNull);
+
+        platform.permissionCompleter = Completer<bool>();
+        final permission = client.hasRequiredPermissions();
+        final concurrentError = AsleepError(
+          code: 'NETWORK_OFFLINE',
+          message: 'The network went offline.',
+          category: AsleepErrorCategory.transient,
+        );
+        platform.emit(TrackingFailedEvent(error: concurrentError));
+        platform.permissionCompleter!.complete(true);
+
+        expect(await permission, isTrue);
+        expect(client.state.error, same(concurrentError));
+
+        final reusedError = AsleepError(
+          code: 'NETWORK_OFFLINE',
+          message: 'The same native error was emitted again.',
+          category: AsleepErrorCategory.transient,
+        );
+        platform.emit(TrackingFailedEvent(error: reusedError));
+        platform.permissionCompleter = Completer<bool>();
+        final repeatedPermission = client.hasRequiredPermissions();
+        platform.emit(TrackingFailedEvent(error: reusedError));
+        platform.permissionCompleter!.complete(true);
+
+        expect(await repeatedPermission, isTrue);
+        expect(client.state.error, same(reusedError));
+      },
+    );
+
+    test(
+      'initialize clears its starting error in the completion snapshot',
+      () async {
+        platform.loggingError = StateError('old failure');
+        await captureAsleepException(client.setLoggingEnabled(true));
+        final oldError = client.state.error;
+        final states = <AsleepSnapshot>[];
+        final subscription = client.states.listen(states.add);
+
+        platform.loggingError = null;
+        await client.initialize(
+          const AsleepSetupOptions(apiKey: 'test-api-key'),
+        );
+
+        expect(oldError, isNotNull);
+        expect(client.state.setupStatus, SetupStatus.complete);
+        expect(client.state.error, isNull);
+        expect(
+          states.where(
+            (state) =>
+                state.setupStatus == SetupStatus.complete &&
+                identical(state.error, oldError),
+          ),
+          isEmpty,
+        );
+        await subscription.cancel();
+      },
+    );
+
+    test(
+      'configure clears its starting error in the completion snapshot',
+      () async {
+        await client.initialize(
+          const AsleepSetupOptions(apiKey: 'test-api-key'),
+        );
+        platform.loggingError = StateError('old failure');
+        await captureAsleepException(client.setLoggingEnabled(true));
+        final oldError = client.state.error;
+        final states = <AsleepSnapshot>[];
+        final subscription = client.states.listen(states.add);
+
+        platform.loggingError = null;
+        await client.configure(
+          const AsleepConfiguration(apiKey: 'test-api-key'),
+        );
+
+        expect(oldError, isNotNull);
+        expect(client.state.setupStatus, SetupStatus.complete);
+        expect(client.state.error, isNull);
+        expect(
+          states.where(
+            (state) =>
+                state.setupStatus == SetupStatus.complete &&
+                identical(state.error, oldError),
+          ),
+          isEmpty,
+        );
+        await subscription.cancel();
+      },
+    );
+
+    test('start clears its starting error in the tracking snapshot', () async {
+      await prepareClient(client);
+      platform.loggingError = StateError('old failure');
+      await captureAsleepException(client.setLoggingEnabled(true));
+      final oldError = client.state.error;
+      final states = <AsleepSnapshot>[];
+      final subscription = client.states.listen(states.add);
+
+      platform.loggingError = null;
+      await client.startTracking();
+
+      expect(oldError, isNotNull);
+      expect(client.state.trackingStatus, TrackingStatus.tracking);
+      expect(client.state.error, isNull);
+      expect(
+        states.where(
+          (state) =>
+              state.trackingStatus == TrackingStatus.tracking &&
+              identical(state.error, oldError),
+        ),
+        isEmpty,
+      );
+      await subscription.cancel();
+    });
+
+    test(
+      'restore clears its starting error in the tracking snapshot',
+      () async {
+        platform.loggingError = StateError('old failure');
+        await captureAsleepException(client.setLoggingEnabled(true));
+        final oldError = client.state.error;
+        final states = <AsleepSnapshot>[];
+        final subscription = client.states.listen(states.add);
+
+        platform.loggingError = null;
+        platform.hasActiveSession = true;
+        await client.checkAndRestoreTracking();
+
+        expect(oldError, isNotNull);
+        expect(client.state.trackingStatus, TrackingStatus.tracking);
+        expect(client.state.error, isNull);
+        expect(
+          states.where(
+            (state) =>
+                state.trackingStatus == TrackingStatus.tracking &&
+                identical(state.error, oldError),
+          ),
+          isEmpty,
+        );
+        await subscription.cancel();
+      },
+    );
+
+    test(
+      'battery check clears its starting error in the checked snapshot',
+      () async {
+        await client.initialize(
+          const AsleepSetupOptions(apiKey: 'test-api-key'),
+        );
+        platform.loggingError = StateError('old failure');
+        await captureAsleepException(client.setLoggingEnabled(true));
+        final oldError = client.state.error;
+        final states = <AsleepSnapshot>[];
+        final subscription = client.states.listen(states.add);
+
+        platform.loggingError = null;
+        await client.checkBatteryOptimization();
+
+        expect(oldError, isNotNull);
+        expect(client.state.batteryOptimizationChecked, isTrue);
+        expect(client.state.error, isNull);
+        expect(
+          states.where(
+            (state) =>
+                state.batteryOptimizationChecked &&
+                identical(state.error, oldError),
+          ),
+          isEmpty,
+        );
+        await subscription.cancel();
+      },
+    );
+
+    test('restore completion preserves a concurrent event error', () async {
+      platform.loggingError = StateError('old failure');
+      await captureAsleepException(client.setLoggingEnabled(true));
+      platform.loggingError = null;
+      platform.restoreCompleter = Completer<RestoreResult>();
+      final states = <AsleepSnapshot>[];
+      final subscription = client.states.listen(states.add);
+
+      final restore = client.checkAndRestoreTracking();
+      await pumpEventQueue();
+      final eventError = AsleepError(
+        code: 'NETWORK_OFFLINE',
+        message: 'The native event failed.',
+        category: AsleepErrorCategory.transient,
+      );
+      platform.emit(TrackingFailedEvent(error: eventError));
+      platform.restoreCompleter!.complete(
+        const RestoreResult(hasActiveSession: true),
+      );
+      await restore;
+
+      expect(client.state.trackingStatus, TrackingStatus.tracking);
+      expect(client.state.error, same(eventError));
+      expect(
+        states,
+        contains(
+          isA<AsleepSnapshot>()
+              .having(
+                (state) => state.trackingStatus,
+                'trackingStatus',
+                TrackingStatus.tracking,
+              )
+              .having((state) => state.error, 'error', same(eventError)),
+        ),
+      );
+      await subscription.cancel();
+    });
+
+    test('configure completion preserves a concurrent event error', () async {
+      await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
+      platform.loggingError = StateError('old failure');
+      await captureAsleepException(client.setLoggingEnabled(true));
+      platform.loggingError = null;
+      platform.configureCompleter = Completer<void>();
+      final states = <AsleepSnapshot>[];
+      final subscription = client.states.listen(states.add);
+
+      final configuration = client.configure(
+        const AsleepConfiguration(apiKey: 'test-api-key'),
+      );
+      await pumpEventQueue();
+      final eventError = AsleepError(
+        code: 'NETWORK_OFFLINE',
+        message: 'The native event failed.',
+        category: AsleepErrorCategory.transient,
+      );
+      platform.emit(TrackingFailedEvent(error: eventError));
+      platform.configureCompleter!.complete();
+      await configuration;
+
+      expect(client.state.setupStatus, SetupStatus.complete);
+      expect(client.state.error, same(eventError));
+      expect(
+        states,
+        contains(
+          isA<AsleepSnapshot>()
+              .having(
+                (state) => state.setupStatus,
+                'setupStatus',
+                SetupStatus.complete,
+              )
+              .having((state) => state.error, 'error', same(eventError)),
+        ),
+      );
+      await subscription.cancel();
+    });
+
     test('dispose detaches native events and closes streams', () async {
       var eventCount = 0;
       var stateDone = false;
@@ -1066,11 +1880,66 @@ void main() {
       expect(stateDone, isTrue);
       expect(modes.sublist(modes.length - 2), <bool>[true, false]);
       expect(client.state.isOnDeviceAnalysisEnabled, isFalse);
+      expect(client.clearError, returnsNormally);
       await eventSubscription.cancel();
       await stateSubscription.cancel();
     });
 
-    test('dispose rejects commands from the terminal state listener', () async {
+    test(
+      'commands after disposal do not replace the terminal snapshot',
+      () async {
+        await client.initialize(
+          const AsleepSetupOptions(apiKey: 'test-api-key'),
+        );
+        await client.dispose();
+        final terminalState = client.state;
+
+        final exception = await captureAsleepException(
+          client.hasRequiredPermissions(),
+        );
+
+        expect(exception.error?.code, AsleepErrorCode.disposed.name);
+        expect(client.state, same(terminalState));
+      },
+    );
+
+    test(
+      'in-flight command failures do not replace the terminal snapshot',
+      () async {
+        await client.initialize(
+          const AsleepSetupOptions(apiKey: 'test-api-key'),
+        );
+        platform.permissionCompleter = Completer<bool>();
+        final permission = client.hasRequiredPermissions();
+        await client.dispose();
+        final terminalState = client.state;
+
+        platform.permissionCompleter!.completeError(
+          StateError('late permission failure'),
+        );
+        final exception = await captureAsleepException(permission);
+
+        expect(exception.error?.message, contains('late permission failure'));
+        expect(client.state, same(terminalState));
+      },
+    );
+
+    test('in-flight command successes reject after disposal', () async {
+      await client.initialize(const AsleepSetupOptions(apiKey: 'test-api-key'));
+      platform.permissionCompleter = Completer<bool>();
+      final permission = client.hasRequiredPermissions();
+      await client.dispose();
+      final terminalState = client.state;
+
+      platform.permissionCompleter!.complete(true);
+      final exception = await captureAsleepException(permission);
+
+      expect(exception.code, AsleepErrorCode.disposed);
+      expect(exception.error?.code, AsleepErrorCode.disposed.name);
+      expect(client.state, same(terminalState));
+    });
+
+    test('clearError is a no-op from the terminal state listener', () async {
       Object? reentrantError;
       var observeTerminalState = false;
       final subscription = client.states.listen((state) {
@@ -1092,14 +1961,7 @@ void main() {
       observeTerminalState = true;
       await client.dispose();
 
-      expect(
-        reentrantError,
-        isA<AsleepException>().having(
-          (error) => error.code,
-          'code',
-          AsleepErrorCode.disposed,
-        ),
-      );
+      expect(reentrantError, isNull);
       await subscription.cancel();
     });
 
@@ -1172,9 +2034,11 @@ void main() {
       platform.disposeError = StateError('native cleanup failed');
       disposeFailureExpected = true;
 
-      await expectLater(client.dispose(), throwsStateError);
+      final exception = await captureAsleepException(client.dispose());
       await pumpEventQueue();
 
+      expect(exception.code, AsleepErrorCode.nativeFailure);
+      expect(exception.error, same(client.state.error));
       expect(platform.eventCancelCount, 1);
       expect(platform.disposeCount, 1);
       expect(eventsDone, isTrue);
@@ -1252,6 +2116,19 @@ class FakeAsleepPlatform extends AsleepPlatform {
   AsleepError? setupFailureEvent;
   AsleepError? configureFailureEvent;
   Object? startError;
+  Object? restoreError;
+  Object? batteryCheckError;
+  Object? batteryRequestError;
+  Object? permissionCheckError;
+  Object? permissionRequestError;
+  Object? resumeError;
+  Object? stopError;
+  Object? analysisError;
+  Object? reportError;
+  Object? reportListError;
+  Object? averageReportError;
+  Object? deleteError;
+  Object? loggingError;
   Object? disposeError;
   Completer<void>? startCompleter;
   Completer<void>? setupCompleter;
@@ -1311,6 +2188,9 @@ class FakeAsleepPlatform extends AsleepPlatform {
 
   @override
   Future<RestoreResult> checkAndRestoreTracking() async {
+    if (restoreError case final error?) {
+      throw error;
+    }
     if (restoreCompleter case final completer?) {
       return completer.future;
     }
@@ -1319,6 +2199,9 @@ class FakeAsleepPlatform extends AsleepPlatform {
 
   @override
   Future<BatteryOptimizationStatus> checkBatteryOptimization() async {
+    if (batteryCheckError case final error?) {
+      throw error;
+    }
     return BatteryOptimizationStatus(
       exempted: batteryExempted,
       platform: 'test',
@@ -1326,10 +2209,18 @@ class FakeAsleepPlatform extends AsleepPlatform {
   }
 
   @override
-  Future<bool> requestBatteryOptimizationExemption() async => true;
+  Future<bool> requestBatteryOptimizationExemption() async {
+    if (batteryRequestError case final error?) {
+      throw error;
+    }
+    return true;
+  }
 
   @override
   Future<bool> hasRequiredPermissions() async {
+    if (permissionCheckError case final error?) {
+      throw error;
+    }
     if (permissionCompleter case final completer?) {
       return completer.future;
     }
@@ -1339,6 +2230,9 @@ class FakeAsleepPlatform extends AsleepPlatform {
   @override
   Future<bool> requestRequiredPermissions() async {
     permissionRequestCount++;
+    if (permissionRequestError case final error?) {
+      throw error;
+    }
     return hasPermissions;
   }
 
@@ -1354,18 +2248,27 @@ class FakeAsleepPlatform extends AsleepPlatform {
   @override
   Future<void> resumeTracking() async {
     resumeCount++;
+    if (resumeError case final error?) {
+      throw error;
+    }
     await resumeCompleter?.future;
   }
 
   @override
   Future<void> stopTracking() async {
     stopCount++;
+    if (stopError case final error?) {
+      throw error;
+    }
     await stopCompleter?.future;
   }
 
   @override
   Future<AnalysisRequest> requestAnalysis() async {
     analysisRequestCount++;
+    if (analysisError case final error?) {
+      throw error;
+    }
     if (analysisCompleter case final completer?) {
       return completer.future;
     }
@@ -1374,7 +2277,7 @@ class FakeAsleepPlatform extends AsleepPlatform {
 
   @override
   Future<AsleepReport> getReport(String sessionId) {
-    throw UnimplementedError();
+    throw reportError ?? UnimplementedError();
   }
 
   @override
@@ -1382,19 +2285,30 @@ class FakeAsleepPlatform extends AsleepPlatform {
     String fromDate,
     String toDate,
   ) async {
+    if (reportListError case final error?) {
+      throw error;
+    }
     return const <AsleepSession>[];
   }
 
   @override
   Future<AsleepAverageReport> getAverageReport(String fromDate, String toDate) {
-    throw UnimplementedError();
+    throw averageReportError ?? UnimplementedError();
   }
 
   @override
-  Future<void> deleteSession(String sessionId) async {}
+  Future<void> deleteSession(String sessionId) async {
+    if (deleteError case final error?) {
+      throw error;
+    }
+  }
 
   @override
-  Future<void> setLoggingEnabled(bool enabled) async {}
+  Future<void> setLoggingEnabled(bool enabled) async {
+    if (loggingError case final error?) {
+      throw error;
+    }
+  }
 
   @override
   Future<void> dispose() async {
@@ -1427,6 +2341,23 @@ final Matcher throwsInvalidArgument = throwsA(
     AsleepErrorCode.invalidArgument,
   ),
 );
+
+final Matcher throwsNativeFailure = throwsA(
+  isA<AsleepException>().having(
+    (error) => error.code,
+    'code',
+    AsleepErrorCode.nativeFailure,
+  ),
+);
+
+Future<AsleepException> captureAsleepException(Future<Object?> future) async {
+  try {
+    await future;
+  } on AsleepException catch (error) {
+    return error;
+  }
+  throw TestFailure('Expected AsleepException.');
+}
 
 extension on AsleepError {
   TrackingFailedEvent get asTrackingFailure => TrackingFailedEvent(error: this);

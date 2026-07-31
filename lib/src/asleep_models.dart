@@ -213,6 +213,7 @@ class AsleepException implements Exception {
     this.nativeCode,
     this.nativeDetails,
     this.cause,
+    this.error,
   });
 
   final AsleepErrorCode code;
@@ -220,6 +221,13 @@ class AsleepException implements Exception {
   final String? nativeCode;
   final Object? nativeDetails;
   final Object? cause;
+
+  /// Canonical semantic error published by the command to its client snapshot.
+  ///
+  /// This is non-null for failures thrown by a public `AsleepClient` command.
+  /// Lower-level decoding errors may be created before a client can project
+  /// them and therefore leave this field null.
+  final AsleepError? error;
 
   @override
   String toString() => 'AsleepException(${code.name}): $message';
