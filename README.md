@@ -18,7 +18,7 @@ tracking.
 | React Native developer journey | `react-native-asleep` 1.2.0 |
 | Android native artifact | `ai.asleep:asleepsdk:3.2.1` |
 | iOS native artifact | `AsleepSDK` 3.2.0 |
-| Flutter toolchain | Flutter 3.44.8 / Dart 3.12.2 |
+| Flutter toolchain | Flutter 3.44.2 minimum; 3.44.8 current / Dart 3.12.2 |
 | Minimum platforms | Android API 24 / iOS 15 |
 | State surface | Immutable snapshot + `Future` commands + broadcast `Stream` |
 | Transport | Pigeon 27.3.0, internal generated API |
@@ -228,16 +228,18 @@ iOS CocoaPods artifacts.
 
 ## CI and delivery
 
-GitHub Actions runs Dart contracts, Android bridge tests and an example APK
-build, plus CocoaPods validation and an iOS simulator build. Pushes to `main`
-and manual runs retain the non-production example artifacts for seven days.
+GitHub Actions runs Dart contracts on the minimum and current toolchains,
+Android bridge tests and both example and clean-consumer APK builds, plus
+CocoaPods validation and both example and clean-consumer iOS builds. Pushes to
+`main` and manual runs retain the non-production example artifacts for seven
+days.
 
 Release tags must be signed, point to a commit contained in `main`, match the
 package and changelog versions, and pass Dart, Android, iOS, archive, API, and
-package-score validation. The first pub.dev release is published manually and
-transferred to the verified `asleep.ai` publisher. OIDC publishing and GitHub
-Release creation stay disabled until their repository variables are explicitly
-approved.
+package-score validation. A successful automated publication is followed by
+clean Android and iOS builds that resolve the exact hosted version before a
+GitHub Release can be created. Maintainers can also run the `Hosted consumer`
+workflow for an exact already-published version.
 
 ## Documentation, support, and security
 

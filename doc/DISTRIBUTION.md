@@ -1,18 +1,17 @@
 # Distribution and release contract
 
-Verified on 2026-07-30 against the Dart, Flutter, pub.dev, and GitHub
+Verified on 2026-07-31 against the Dart, Flutter, pub.dev, and GitHub
 documentation linked below.
 
 ## Current safety boundary
 
 The GitHub repository is private. A pub.dev release is public even when its
 source repository is private: any pub user can download the package archive
-and its included source files. The experimental 0.1.0 candidate is publishable,
-and the release owner confirmed on 2026-07-30 that the existing Asleep
-proprietary notice applies to the Flutter archive. No upload is authorized
-until the release owner approves the exact archive. `.pubignore` excludes
-internal `doc/` and Pigeon schema files; Dart, Kotlin, Swift, generated
-transport, and example sources remain public archive contents.
+and its included source files. Experimental version 0.1.0 is published under
+the verified `asleep.ai` publisher. The release owner confirmed on 2026-07-30
+that the existing Asleep proprietary notice applies to the Flutter archive.
+`.pubignore` excludes internal `doc/` and Pigeon schema files; Dart, Kotlin,
+Swift, generated transport, and example sources remain public archive contents.
 
 The pinned AsleepSDK 3.2.0 CocoaPods artifact is the existing commercial
 runtime baseline. It does not contain a privacy manifest. That is an App Store
@@ -26,11 +25,9 @@ External dependency access was rechecked on 2026-07-30. Android
 release asset. Consumers still need Asleep credentials and application review
 to use the service.
 
-On 2026-07-30, the pub.dev API endpoint for
-`asleep_sdk_flutter` returned HTTP 404. This is evidence that no public package
-currently uses the name, not a reservation. Recheck immediately before the
-first publish. The verified `asleep.ai` publisher exists but owns no package
-until the first upload is completed and transferred.
+On 2026-07-31, the pub.dev API reports `asleep_sdk_flutter` 0.1.0 under the
+verified `asleep.ai` publisher. Hosted-consumer verification must request an
+exact published version rather than relying on the latest compatible release.
 
 No workflow in this repository creates a tag. With the repository's default
 settings, the release workflow validates a candidate while its publish and
@@ -79,7 +76,7 @@ The release owner must resolve every item before the first upload:
 4. Recheck that the pinned Android Maven and iOS CocoaPods artifacts remain
    publicly downloadable for external consumers.
 5. Confirm the supported Flutter, Dart, Android, iOS, Asleep Android SDK, and
-   Asleep iOS SDK version ranges.
+   Asleep iOS SDK versions still match `COMPATIBILITY.md`.
 6. Review the exact `dart pub publish --dry-run` archive and run the secret
    scan from a clean release commit.
 7. Have an authorized human run the first `dart pub publish`.
@@ -156,8 +153,11 @@ notice over rewriting release history.
 9. Confirm release validation.
 10. For the first public release, have the authorized uploader run
     `dart pub publish`; do not enable OIDC first.
-11. For later public releases, confirm the gated OIDC job succeeded.
-12. Create the GitHub Release with generated notes, either through the gated
+11. For later public releases, confirm the gated OIDC job succeeded and the
+    exact hosted version passed both clean-consumer builds.
+12. For a manual publication, run the `Hosted consumer` workflow with the exact
+    published version and require both platform jobs to pass.
+13. Create the GitHub Release with generated notes, either through the gated
     job or an explicitly approved equivalent command.
 
 `pubspec.yaml`, the tag, and the CHANGELOG heading must contain the same stable
@@ -190,10 +190,26 @@ flutter test
 (cd example && flutter test)
 dart doc
 flutter pub outdated
+archive_dir="$(mktemp -d)"
+archive="$archive_dir/asleep_sdk_flutter.tar.gz"
 copy="$(mktemp -d)"
-git archive HEAD | tar -x -C "$copy"
+dart pub publish --to-archive "$archive"
+tar -xzf "$archive" -C "$copy"
 (cd "$copy" && dart pub publish --dry-run)
 ```
+
+Candidate CI also creates fresh Android and iOS applications with
+`flutter create`, resolves `asleep_sdk_flutter` from that exact extracted
+publication archive, analyzes the import and `AsleepClient` construction
+fixture, and builds each native application. After publication, the `Hosted
+consumer` workflow repeats the same checks with an exact pub.dev version:
+
+```sh
+gh workflow run hosted-consumer.yml -f version=0.1.0
+```
+
+The hosted workflow must not use a path override, Git dependency, API key, or
+tracking call.
 
 Run the verified latest pana version against a disposable copy because pana
 may modify the package. The release workflow pins pana 0.23.15 and rejects a

@@ -14,9 +14,34 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
+  FLUTTER_MIN_VERSION: 3.44.2
   FLUTTER_VERSION: 3.44.8
 
 jobs:
+  dart-minimum:
+    name: Dart contracts (minimum Flutter)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up minimum Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_MIN_VERSION }}
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test package
+        run: flutter test
+
   dart:
     name: Dart contracts
     runs-on: ubuntu-latest
@@ -81,12 +106,48 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
+      - name: Record consumer toolchain
+        run: |
+          flutter --version
+          java -version
+
       - name: Install dependencies
         run: flutter pub get
+
+      - name: Stage candidate package
+        run: |
+          archive_dir="$(mktemp -d "$RUNNER_TEMP/asleep-sdk-archive.XXXXXX")"
+          package_archive="$archive_dir/asleep_sdk_flutter.tar.gz"
+          package_copy="$(mktemp -d "$RUNNER_TEMP/asleep-sdk-consumer.XXXXXX")"
+          dart pub publish --to-archive "$package_archive"
+          tar -xzf "$package_archive" -C "$package_copy"
+          echo "PACKAGE_COPY=$package_copy" >> "$GITHUB_ENV"
+
+      - name: Resolve candidate in clean consumer
+        run: |
+          consumer="$(mktemp -d "$RUNNER_TEMP/asleep-consumer-android.XXXXXX")"
+          flutter create \
+            --empty \
+            --org ai.asleep \
+            --platforms android \
+            --project-name asleep_consumer \
+            "$consumer"
+          cp .github/fixtures/consumer_main.dart "$consumer/lib/main.dart"
+          flutter pub add \
+            --no-example \
+            --directory "$consumer" \
+            "asleep_sdk_flutter@{path: $PACKAGE_COPY}"
+          echo "CONSUMER=$consumer" >> "$GITHUB_ENV"
+
+      - name: Analyze candidate consumer
+        run: flutter analyze "$CONSUMER"
 
       - name: Build example APK
         working-directory: example
         run: flutter build apk --debug
+
+      - name: Build candidate consumer APK
+        run: cd "$CONSUMER" && flutter build apk --debug
 
       - name: Test Android bridge
         working-directory: example/android
@@ -116,12 +177,58 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
+      - name: Record consumer toolchain
+        run: |
+          flutter --version
+          xcodebuild -version
+          pod --version
+
       - name: Install dependencies
         run: flutter pub get
+
+      - name: Stage candidate package
+        run: |
+          archive_dir="$(mktemp -d "$RUNNER_TEMP/asleep-sdk-archive.XXXXXX")"
+          package_archive="$archive_dir/asleep_sdk_flutter.tar.gz"
+          package_copy="$(mktemp -d "$RUNNER_TEMP/asleep-sdk-consumer.XXXXXX")"
+          dart pub publish --to-archive "$package_archive"
+          tar -xzf "$package_archive" -C "$package_copy"
+          echo "PACKAGE_COPY=$package_copy" >> "$GITHUB_ENV"
+
+      - name: Resolve candidate in clean consumer
+        run: |
+          consumer="$(mktemp -d "$RUNNER_TEMP/asleep-consumer-ios.XXXXXX")"
+          flutter create \
+            --empty \
+            --org ai.asleep \
+            --platforms ios \
+            --project-name asleep_consumer \
+            "$consumer"
+          cp .github/fixtures/consumer_main.dart "$consumer/lib/main.dart"
+          flutter pub add \
+            --no-example \
+            --directory "$consumer" \
+            "asleep_sdk_flutter@{path: $PACKAGE_COPY}"
+          sed -i.bak \
+            "s/# platform :ios, '13.0'/platform :ios, '15.0'/" \
+            "$consumer/ios/Podfile"
+          sed -i.bak \
+            's/IPHONEOS_DEPLOYMENT_TARGET = 13.0;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/' \
+            "$consumer/ios/Runner.xcodeproj/project.pbxproj"
+          perl -0pi.bak -e \
+            's/    flutter_additional_ios_build_settings\(target\)\n/    flutter_additional_ios_build_settings(target)\n    target.build_configurations.each do |config|\n      config.build_settings["IPHONEOS_DEPLOYMENT_TARGET"] = "15.0"\n    end\n/' \
+            "$consumer/ios/Podfile"
+          echo "CONSUMER=$consumer" >> "$GITHUB_ENV"
+
+      - name: Analyze candidate consumer
+        run: flutter analyze "$CONSUMER"
 
       - name: Validate CocoaPods plugin
         working-directory: ios
         run: pod lib lint asleep_sdk_flutter.podspec --allow-warnings --skip-tests
+
+      - name: Build candidate consumer
+        run: cd "$CONSUMER" && flutter build ios --simulator --debug
 
       - name: Build simulator example
         working-directory: example

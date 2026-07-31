@@ -1,3 +1,10 @@
+## Unreleased
+
+- Verify the minimum Flutter/Dart baseline and build clean Android and iOS
+  consumers from staged release candidates and exact hosted versions.
+- Document the supported native build toolchains and the deliberate iOS 15
+  deployment target.
+
 ## 0.1.0
 
 - Publish the first experimental Flutter wrapper for AsleepSDK on Android and
