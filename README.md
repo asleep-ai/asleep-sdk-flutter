@@ -112,7 +112,8 @@ The state stream is broadcast and does not replay the current value. Read
 
 The native Asleep SDK is process-global. Exactly one Flutter engine may own it
 at a time. The first engine that initializes or configures the SDK owns it until
-that engine detaches; another engine receives an immediate native failure.
+that engine detaches with no unresolved native initialization attempt; another
+engine receives an immediate native failure.
 
 On iOS, each native setup phase and user-join/configuration phase has a
 30-second completion bound. A timeout rejects the command with native code

@@ -157,9 +157,15 @@ depend on Riverpod, Bloc, Signals, or another application state framework.
   `NSMicrophoneUsageDescription` and the `audio` background mode.
 - Setup and user join/configuration each have a 30-second native completion
   bound. A timed-out attempt fails with `INITIALIZATION_TIMEOUT`, returns the
-  Dart client to an uninitialized state, and may be retried by the same engine.
-  Each native delegate is scoped to one attempt, so a late callback is ignored
-  instead of completing or mutating a newer retry.
+  Dart client to an uninitialized state, and quarantines the process-global
+  native initialization lane. Retry fails with
+  `INITIALIZATION_RECOVERY_REQUIRED` until the exact timed-out phase delivers a
+  terminal callback. That late callback is ignored for public state and command
+  completion but settles the quarantine so a subsequent retry can begin. A
+  callback from another phase or attempt cannot settle it. If the native SDK
+  never delivers the terminal callback, the application process must restart;
+  detaching or replacing the Flutter engine cannot safely release the in-flight
+  native operation.
 - The SDK owns its recording `AVAudioSession` lifecycle while tracking.
 - `iosAudioSessionOptions` are additive options:
   `duckOthers`, `allowAirPlay`, `allowBluetooth`, and
