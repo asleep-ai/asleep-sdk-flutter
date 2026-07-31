@@ -37,6 +37,11 @@ final _prohibitedEvidenceValue = RegExp(
   caseSensitive: false,
 );
 
+final _canonicalUtcTimestamp = RegExp(
+  r'^[0-9]{4}-[0-9]{2}-[0-9]{2}T'
+  r'[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?Z$',
+);
+
 const _prohibitedEvidenceKeys = <String>{
   'apikey',
   'accesstoken',
@@ -545,8 +550,10 @@ void _validateTimestampValue(
   Map<String, DateTime> timestamps,
 ) {
   if (allowNull && value == null) return;
-  final timestamp = value is String ? DateTime.tryParse(value) : null;
-  if (timestamp == null || !timestamp.isUtc) {
+  final timestamp = value is String && _canonicalUtcTimestamp.hasMatch(value)
+      ? DateTime.tryParse(value)
+      : null;
+  if (timestamp == null) {
     errors.add('$path must be an ISO-8601 UTC timestamp.');
   } else {
     timestamps[path] = timestamp;

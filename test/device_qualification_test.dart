@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import '../tool/src/device_qualification.dart';
@@ -320,6 +323,99 @@ void main() {
     );
   });
 
+  test('timestamp spellings must use canonical uppercase-Z UTC', () {
+    final timestampPaths =
+        <String, void Function(Map<String, Object?>, String)>{
+          'run.startedAt': (evidence, value) {
+            (evidence['run']! as Map<String, Object?>)['startedAt'] = value;
+          },
+          'run.completedAt': (evidence, value) {
+            (evidence['run']! as Map<String, Object?>)['completedAt'] = value;
+          },
+          'platforms.android.scenarios.full_night_session.completedAt':
+              (evidence, value) {
+                (_scenarios(evidence, 'android')['full_night_session']!
+                        as Map<String, Object?>)['completedAt'] =
+                    value;
+              },
+          'platforms.ios.scenarios.full_night_session.completedAt':
+              (evidence, value) {
+                (_scenarios(evidence, 'ios')['full_night_session']!
+                        as Map<String, Object?>)['completedAt'] =
+                    value;
+              },
+        };
+
+    for (final timestampPath in timestampPaths.entries) {
+      for (final invalidTimestamp in _invalidTimestampSpellings) {
+        final evidence = _completeEvidence();
+        timestampPath.value(evidence, invalidTimestamp);
+
+        expect(
+          validateDeviceQualification(
+            evidence,
+            expectations: _expectations,
+            now: DateTime.utc(2026, 8),
+          ),
+          contains('${timestampPath.key} must be an ISO-8601 UTC timestamp.'),
+          reason: '${timestampPath.key} accepted $invalidTimestamp',
+        );
+      }
+    }
+  });
+
+  test('canonical uppercase-Z timestamps accept optional fractions', () {
+    final evidence = _completeEvidence();
+    final run = evidence['run']! as Map<String, Object?>;
+    run['startedAt'] = '2026-07-30T23:00:00Z';
+    run['completedAt'] = '2026-07-31T02:00:00.123456Z';
+    (_scenarios(evidence, 'android')['full_night_session']!
+            as Map<String, Object?>)['completedAt'] =
+        '2026-07-31T01:00:00.5Z';
+    (_scenarios(evidence, 'ios')['full_night_session']!
+            as Map<String, Object?>)['completedAt'] =
+        '2026-07-31T01:00:00Z';
+
+    expect(
+      validateDeviceQualification(
+        evidence,
+        expectations: _expectations,
+        now: DateTime.utc(2026, 8),
+      ),
+      isEmpty,
+    );
+  });
+
+  test('JSON Schema enforces the canonical timestamp spelling', () {
+    final schema =
+        jsonDecode(
+              File('qualification/evidence.schema.json').readAsStringSync(),
+            )
+            as Map<String, Object?>;
+    final properties = schema['properties']! as Map<String, Object?>;
+    final run =
+        (properties['run']! as Map<String, Object?>)['properties']!
+            as Map<String, Object?>;
+    final definitions = schema[r'$defs']! as Map<String, Object?>;
+    final scenario =
+        (definitions['scenario']! as Map<String, Object?>)['properties']!
+            as Map<String, Object?>;
+    final timestampSchemas = <Map<String, Object?>>[
+      run['startedAt']! as Map<String, Object?>,
+      run['completedAt']! as Map<String, Object?>,
+      scenario['completedAt']! as Map<String, Object?>,
+    ];
+
+    for (final timestampSchema in timestampSchemas) {
+      final pattern = RegExp(timestampSchema['pattern']! as String);
+      for (final invalidTimestamp in _invalidTimestampSpellings) {
+        expect(pattern.hasMatch(invalidTimestamp), isFalse);
+      }
+      expect(pattern.hasMatch('2026-07-31T01:00:00Z'), isTrue);
+      expect(pattern.hasMatch('2026-07-31T01:00:00.123456Z'), isTrue);
+    }
+  });
+
   test('incomplete template shape can be checked without credentials', () {
     final evidence = _completeEvidence();
     evidence['privacy'] = <String, Object?>{
@@ -352,6 +448,13 @@ void main() {
     );
   });
 }
+
+const _invalidTimestampSpellings = <String>[
+  '2026-07-31T01:00:00+02:00',
+  '2026-07-31T01:00:00+00:00',
+  '2026-07-31T01:00:00z',
+  '2026-07-31 01:00:00Z',
+];
 
 const _expectations = QualificationExpectations(
   commitSha: '49fa33ca0d184d7c1954ad79a3077a5e67c78aa9',

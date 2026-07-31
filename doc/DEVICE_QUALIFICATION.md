@@ -118,9 +118,10 @@ dart run tool/validate_device_qualification.dart \
   --expected-ios-native-version 3.2.0
 ```
 
-All scenarios must be `passed`, timestamps must be UTC, each scenario must link
-to a stable HTTPS URL without a query/fragment, and minimum/current device
-roles must both be covered.
+All scenarios must be `passed`, timestamps must use canonical uppercase-`Z`
+UTC form (for example, `2026-07-31T01:00:00Z`), each scenario must link to a
+stable HTTPS URL without a query/fragment, and minimum/current device roles
+must both be covered.
 
 An allowlisted reviewer other than the operator must post this exact,
 versioned body in an issue comment in this repository:

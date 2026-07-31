@@ -47,8 +47,16 @@
       "additionalProperties": false,
       "required": ["startedAt", "completedAt", "operator"],
       "properties": {
-        "startedAt": { "type": ["string", "null"], "format": "date-time" },
-        "completedAt": { "type": ["string", "null"], "format": "date-time" },
+        "startedAt": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "completedAt": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
         "operator": { "type": "string" }
       }
     },
@@ -179,7 +187,11 @@
       "required": ["status", "completedAt", "evidence", "notes", "deviceRoles"],
       "properties": {
         "status": { "enum": ["passed", "failed", "blocked", "not_run"] },
-        "completedAt": { "type": ["string", "null"], "format": "date-time" },
+        "completedAt": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
         "evidence": {
           "type": "array",
           "uniqueItems": true,
