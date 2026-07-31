@@ -52,6 +52,8 @@ Do not add free-form prose. The validator recursively rejects credential,
 raw-data, report, sleep-score, and user/session identifier vocabulary in every
 string field, including device metadata and evidence URLs. The workflow applies
 the same quiet defense-in-depth scan without printing rejected values.
+Evidence JSON must not repeat object member names; the validator rejects
+duplicates before decoding or retaining the submitted bytes.
 
 ## Android procedure
 

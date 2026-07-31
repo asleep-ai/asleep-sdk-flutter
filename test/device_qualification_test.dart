@@ -280,6 +280,45 @@ void main() {
     );
   });
 
+  test('duplicate JSON members are rejected before evidence decoding', () {
+    const duplicateSources = <String>[
+      '{"operator":"api_key=secret","operator":"safe"}',
+      '{"operator":"api_key=secret","oper\\u0061tor":"safe"}',
+      '{"outer":{"value":1,"value":2}}',
+    ];
+
+    for (final source in duplicateSources) {
+      expect(
+        () => decodeDeviceQualificationJson(source),
+        throwsA(
+          isA<FormatException>()
+              .having(
+                (error) => error.message,
+                'message',
+                'Evidence JSON must not contain duplicate object members.',
+              )
+              .having(
+                (error) => error.toString(),
+                'safe error',
+                isNot(contains('secret')),
+              ),
+        ),
+      );
+    }
+  });
+
+  test('equal member names in separate JSON objects remain valid', () {
+    expect(
+      decodeDeviceQualificationJson(
+        '{"first":{"value":1},"second":{"value":2}}',
+      ),
+      <String, Object?>{
+        'first': <String, Object?>{'value': 1},
+        'second': <String, Object?>{'value': 2},
+      },
+    );
+  });
+
   test('validation errors never echo rejected evidence values', () {
     final evidence = _completeEvidence();
     const sensitiveValue = 'userId=patient-123';

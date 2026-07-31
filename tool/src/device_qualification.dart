@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 const androidQualificationScenarios = <String>{
   'cold_start_without_permissions',
   'permission_denial_and_regrant',
@@ -84,6 +86,11 @@ class QualificationExpectations {
   final String? androidNativeVersion;
   final String? iosNativeVersion;
   final String? operator;
+}
+
+Object? decodeDeviceQualificationJson(String source) {
+  _DuplicateJsonMemberScanner(source).scan();
+  return jsonDecode(source);
 }
 
 List<String> validateDeviceQualification(
@@ -250,6 +257,124 @@ List<String> validateDeviceQualification(
     now: (now ?? DateTime.now()).toUtc(),
   );
   return errors;
+}
+
+class _DuplicateJsonMemberScanner {
+  _DuplicateJsonMemberScanner(this.source);
+
+  final String source;
+  int _index = 0;
+
+  void scan() {
+    _skipWhitespace();
+    _scanValue();
+    _skipWhitespace();
+    if (_index != source.length) _invalid();
+  }
+
+  void _scanValue() {
+    _skipWhitespace();
+    if (_index >= source.length) _invalid();
+    switch (source.codeUnitAt(_index)) {
+      case 0x7b:
+        _scanObject();
+      case 0x5b:
+        _scanArray();
+      case 0x22:
+        _scanString();
+      default:
+        _scanPrimitive();
+    }
+  }
+
+  void _scanObject() {
+    _index++;
+    _skipWhitespace();
+    if (_consume(0x7d)) return;
+    final members = <String>{};
+    while (true) {
+      _skipWhitespace();
+      if (_index >= source.length || source.codeUnitAt(_index) != 0x22) {
+        _invalid();
+      }
+      final member = _scanString();
+      if (!members.add(member)) {
+        throw const FormatException(
+          'Evidence JSON must not contain duplicate object members.',
+        );
+      }
+      _skipWhitespace();
+      if (!_consume(0x3a)) _invalid();
+      _scanValue();
+      _skipWhitespace();
+      if (_consume(0x7d)) return;
+      if (!_consume(0x2c)) _invalid();
+    }
+  }
+
+  void _scanArray() {
+    _index++;
+    _skipWhitespace();
+    if (_consume(0x5d)) return;
+    while (true) {
+      _scanValue();
+      _skipWhitespace();
+      if (_consume(0x5d)) return;
+      if (!_consume(0x2c)) _invalid();
+    }
+  }
+
+  String _scanString() {
+    final start = _index++;
+    while (_index < source.length) {
+      final codeUnit = source.codeUnitAt(_index++);
+      if (codeUnit == 0x22) {
+        return jsonDecode(source.substring(start, _index)) as String;
+      }
+      if (codeUnit == 0x5c) {
+        if (_index >= source.length) _invalid();
+        _index++;
+      }
+    }
+    _invalid();
+  }
+
+  void _scanPrimitive() {
+    final start = _index;
+    while (_index < source.length) {
+      final codeUnit = source.codeUnitAt(_index);
+      if (_isWhitespace(codeUnit) ||
+          codeUnit == 0x2c ||
+          codeUnit == 0x5d ||
+          codeUnit == 0x7d) {
+        break;
+      }
+      _index++;
+    }
+    if (_index == start) _invalid();
+  }
+
+  void _skipWhitespace() {
+    while (_index < source.length && _isWhitespace(source.codeUnitAt(_index))) {
+      _index++;
+    }
+  }
+
+  bool _consume(int codeUnit) {
+    if (_index >= source.length || source.codeUnitAt(_index) != codeUnit) {
+      return false;
+    }
+    _index++;
+    return true;
+  }
+
+  bool _isWhitespace(int codeUnit) =>
+      codeUnit == 0x20 ||
+      codeUnit == 0x0a ||
+      codeUnit == 0x0d ||
+      codeUnit == 0x09;
+
+  Never _invalid() => throw const FormatException('Evidence JSON is invalid.');
 }
 
 void _validatePlatform(

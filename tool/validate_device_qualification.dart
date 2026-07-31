@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'src/device_qualification.dart';
@@ -17,9 +16,11 @@ void main(List<String> arguments) {
 
   Object? evidence;
   try {
-    evidence = jsonDecode(File(evidencePath).readAsStringSync());
-  } on Object catch (error) {
-    stderr.writeln('Could not read evidence: $error');
+    evidence = decodeDeviceQualificationJson(
+      File(evidencePath).readAsStringSync(),
+    );
+  } on Object {
+    stderr.writeln('Could not read evidence: invalid or unreadable JSON.');
     exitCode = 1;
     return;
   }
