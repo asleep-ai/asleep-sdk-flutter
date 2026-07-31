@@ -47,6 +47,7 @@ void main() {
 
       expect(controller.sdkPreparationInFlight, isFalse);
       expect(controller.sdkPrepared, isFalse);
+      expect(controller.canPrepareSdk, isTrue);
       expect(controller.canStartTracking, isFalse);
       expect(controller.operationMessage, 'Operation failed');
 
@@ -56,6 +57,48 @@ void main() {
       expect(controller.sdkPrepared, isTrue);
       expect(controller.canStartTracking, isTrue);
       expect(controller.operationMessage, 'SDK ready');
+
+      await controller.close();
+    });
+
+    test('completed SDK preparation ignores repeated preparation', () async {
+      final platform = _FakePlatform();
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+      final callsAfterPreparation = List<String>.of(platform.calls);
+
+      expect(controller.canPrepareSdk, isFalse);
+      await controller.initializeOrRestore('replacement-secret');
+
+      expect(platform.calls, callsAfterPreparation);
+      expect(platform.configuredApiKey, isNull);
+      expect(platform.setupApiKey, 'runtime-secret');
+      expect(controller.sdkPrepared, isTrue);
+      expect(controller.operationMessage, 'SDK ready');
+      expect(controller.operationError, isNull);
+
+      await controller.close();
+    });
+
+    test('unprepared live session cannot start SDK preparation', () async {
+      final platform = _FakePlatform()
+        ..restoreResult = const RestoreResult(hasActiveSession: true);
+      final client = AsleepClient(platform: platform);
+      await client.checkAndRestoreTracking();
+      final controller = DiagnosticController(
+        client: client,
+        hostPlatform: DiagnosticHostPlatform.android,
+      );
+      final callsBefore = List<String>.of(platform.calls);
+
+      expect(controller.sdkPrepared, isFalse);
+      expect(controller.canStopTracking, isTrue);
+      expect(controller.canPrepareSdk, isFalse);
+      await controller.initializeOrRestore('runtime-secret');
+
+      expect(platform.calls, callsBefore);
+      expect(platform.configuredApiKey, isNull);
+      expect(controller.sdkPrepared, isFalse);
 
       await controller.close();
     });
@@ -90,10 +133,17 @@ void main() {
         client: client,
         hostPlatform: DiagnosticHostPlatform.android,
       );
+      final callsBefore = List<String>.of(platform.calls);
 
       expect(controller.snapshot.setupStatus, SetupStatus.complete);
       expect(controller.sdkPrepared, isFalse);
       expect(controller.canStartTracking, isFalse);
+      expect(controller.canPrepareSdk, isFalse);
+      await controller.initializeOrRestore('replacement-secret');
+      expect(platform.calls, callsBefore);
+      expect(platform.setupApiKey, 'runtime-secret');
+      expect(platform.configuredApiKey, isNull);
+      expect(controller.sdkPrepared, isFalse);
 
       await controller.close();
     });
@@ -382,6 +432,82 @@ void main() {
         await controller.close();
       },
     );
+
+    test(
+      'pending Stop blocks analysis without replacing its outcome',
+      () async {
+        final platform = _FakePlatform();
+        final controller = _controller(platform);
+        await controller.initializeOrRestore('runtime-secret');
+        platform.emit(const TrackingCreatedEvent(sessionId: 'session-created'));
+
+        await controller.stopTracking();
+
+        expect(controller.stopAwaitingEndEvent, isTrue);
+        expect(controller.snapshot.trackingStatus, TrackingStatus.tracking);
+        expect(controller.canRequestAnalysis, isFalse);
+        expect(controller.operationMessage, 'Tracking stopped');
+        await controller.requestAnalysis();
+
+        expect(platform.calls.where((call) => call == 'analysis').length, 0);
+        expect(controller.operationMessage, 'Tracking stopped');
+        expect(controller.operationError, isNull);
+
+        platform.emit(const TrackingClosedEvent(sessionId: 'session-created'));
+        expect(controller.stopAwaitingEndEvent, isFalse);
+        expect(controller.canRequestAnalysis, isFalse);
+
+        await controller.close();
+      },
+    );
+
+    for (final recoveryRequired in <bool>[false, true]) {
+      test(
+        'pending Stop blocks resume from '
+        '${recoveryRequired ? 'recovery-required' : 'paused'} state',
+        () async {
+          final platform = _FakePlatform();
+          final controller = _controller(platform);
+          await controller.initializeOrRestore('runtime-secret');
+          platform.emit(
+            const TrackingCreatedEvent(sessionId: 'session-created'),
+          );
+          if (recoveryRequired) {
+            platform.emit(
+              TrackingFailedEvent(
+                error: AsleepError(
+                  code: 'CANNOT_ACTIVATE_IN_BACKGROUND',
+                  message: 'Foreground recovery required',
+                  category: AsleepErrorCategory.recoveryRequired,
+                ),
+              ),
+            );
+          } else {
+            platform.emit(const TrackingInterruptedEvent());
+          }
+          expect(controller.canResumeTracking, isTrue);
+
+          await controller.stopTracking();
+
+          expect(controller.stopAwaitingEndEvent, isTrue);
+          expect(controller.canResumeTracking, isFalse);
+          expect(controller.operationMessage, 'Tracking stopped');
+          await controller.resumeTracking();
+
+          expect(platform.resumeCount, 0);
+          expect(controller.operationMessage, 'Tracking stopped');
+          expect(controller.operationError, isNull);
+
+          platform.emit(
+            const TrackingClosedEvent(sessionId: 'session-created'),
+          );
+          expect(controller.stopAwaitingEndEvent, isFalse);
+          expect(controller.canResumeTracking, isFalse);
+
+          await controller.close();
+        },
+      );
+    }
 
     test(
       'recording-dead cleanup Stop waits for a later lifecycle end',

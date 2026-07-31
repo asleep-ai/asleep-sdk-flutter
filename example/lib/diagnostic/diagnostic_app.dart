@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:asleep_sdk_flutter/asleep_sdk_flutter.dart';
 import 'package:flutter/material.dart';
 
 import 'diagnostic_controller.dart';
@@ -137,11 +136,15 @@ class _DiagnosticPageState extends State<DiagnosticPage>
               ),
               const SizedBox(height: 8),
               FilledButton(
-                onPressed: () {
-                  final runtimeApiKey = _apiKey.text;
-                  _apiKey.clear();
-                  unawaited(controller.initializeOrRestore(runtimeApiKey));
-                },
+                onPressed: controller.canPrepareSdk
+                    ? () {
+                        final runtimeApiKey = _apiKey.text;
+                        _apiKey.clear();
+                        unawaited(
+                          controller.initializeOrRestore(runtimeApiKey),
+                        );
+                      }
+                    : null,
                 child: const Text('Initialize / restore'),
               ),
               const Divider(height: 32),
@@ -182,10 +185,7 @@ class _DiagnosticPageState extends State<DiagnosticPage>
                     child: const Text('Start tracking'),
                   ),
                   FilledButton.tonal(
-                    onPressed:
-                        snapshot.trackingStatus == TrackingStatus.paused ||
-                            snapshot.trackingStatus ==
-                                TrackingStatus.recoveryRequired
+                    onPressed: controller.canResumeTracking
                         ? () => unawaited(controller.resumeTracking())
                         : null,
                     child: const Text('Resume tracking'),

@@ -22,6 +22,14 @@ void main() {
     expect(
       tester
           .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Initialize / restore'),
+          )
+          .onPressed,
+      isNotNull,
+    );
+    expect(
+      tester
+          .widget<FilledButton>(
             find.widgetWithText(FilledButton, 'Start tracking'),
           )
           .onPressed,
@@ -42,6 +50,14 @@ void main() {
     expect(
       tester
           .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Initialize / restore'),
+          )
+          .onPressed,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<FilledButton>(
             find.widgetWithText(FilledButton, 'Start tracking'),
           )
           .onPressed,
@@ -55,6 +71,14 @@ void main() {
     await tester.pump();
 
     expect(controller.sdkPrepared, isTrue);
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Initialize / restore'),
+          )
+          .onPressed,
+      isNull,
+    );
     expect(
       tester
           .widget<FilledButton>(

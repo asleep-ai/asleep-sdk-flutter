@@ -17,6 +17,13 @@ class DiagnosticController extends ChangeNotifier {
        _sdkPrepared =
            client.state.setupStatus == SetupStatus.complete &&
            client.state.batteryOptimizationChecked,
+       _sdkPreparationAllowed =
+           client.state.setupStatus == SetupStatus.idle &&
+           client.state.trackingStatus == TrackingStatus.idle &&
+           !client.state.batteryOptimizationChecked &&
+           client.state.error == null &&
+           client.state.sessionId == null &&
+           !client.state.didClose,
        _recordingDeadCleanupRequired =
            client.state.error?.category == AsleepErrorCategory.recordingDead &&
            !client.state.didClose {
@@ -66,6 +73,7 @@ class DiagnosticController extends ChangeNotifier {
   bool _loggingEnabled = false;
   bool _deletionInFlight = false;
   bool _sdkPrepared;
+  bool _sdkPreparationAllowed;
   bool _sdkPreparationInFlight = false;
   bool _analysisRequestInFlight = false;
   bool _startInFlight = false;
@@ -103,6 +111,14 @@ class DiagnosticController extends ChangeNotifier {
   bool get recoveryAwaitingUpload => _recoveryAwaitingUpload;
   bool get trackingRestorationRequired => _trackingRestorationRequired;
   bool get stopAwaitingEndEvent => _stopAwaitingEndEvent;
+  bool get canPrepareSdk =>
+      _sdkPreparationAllowed &&
+      !_sdkPrepared &&
+      !_sdkPreparationInFlight &&
+      !canStopTracking &&
+      !_stopAwaitingEndEvent &&
+      !_trackingRestorationRequired &&
+      !_closed;
   bool get canReconcileTracking =>
       _trackingRestorationRequired &&
       !_trackingReconciliationInFlight &&
@@ -121,7 +137,15 @@ class DiagnosticController extends ChangeNotifier {
       _sdkPrepared &&
       _snapshot.trackingStatus == TrackingStatus.tracking &&
       !_snapshot.isAnalyzing &&
-      !_analysisRequestInFlight;
+      !_analysisRequestInFlight &&
+      !_stopAwaitingEndEvent;
+  bool get canResumeTracking =>
+      (_snapshot.trackingStatus == TrackingStatus.paused ||
+          _snapshot.trackingStatus == TrackingStatus.recoveryRequired) &&
+      !_resumeInFlight &&
+      !_recoveryAwaitingUpload &&
+      !_stopAwaitingEndEvent &&
+      !_closed;
 
   String? get operationErrorText => _safeErrorText(_operationError);
   String? get snapshotErrorText => _safeErrorText(_snapshot.error);
@@ -134,7 +158,7 @@ class DiagnosticController extends ChangeNotifier {
   /// [apiKey] remains a method-local value. This controller never persists it,
   /// places it in diagnostic state, or includes it in logs and error text.
   Future<void> initializeOrRestore(String apiKey) async {
-    if (_sdkPreparationInFlight || _closed) {
+    if (!canPrepareSdk) {
       return;
     }
     _sdkPrepared = false;
@@ -149,9 +173,11 @@ class DiagnosticController extends ChangeNotifier {
       return;
     }
     _sdkPreparationInFlight = true;
+    _sdkPreparationAllowed = false;
     _notify();
+    var prepared = false;
     try {
-      await _run('SDK ready', () async {
+      prepared = await _runWithOutcome('SDK ready', () async {
         final restore = await _client.checkAndRestoreTracking();
         _trackingRestorationRequired = false;
         _trackingClosePending = false;
@@ -169,6 +195,7 @@ class DiagnosticController extends ChangeNotifier {
         _sdkPrepared = true;
       });
     } finally {
+      _sdkPreparationAllowed = !prepared;
       _sdkPreparationInFlight = false;
       _notify();
     }
@@ -485,7 +512,7 @@ class DiagnosticController extends ChangeNotifier {
   }
 
   Future<void> _resumeForForeground() async {
-    if (_resumeInFlight || _recoveryAwaitingUpload || _closed) {
+    if (!canResumeTracking) {
       return;
     }
     _resumeInFlight = true;
