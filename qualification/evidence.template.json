@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "candidate": {
+    "commitSha": "0000000000000000000000000000000000000000",
+    "packageVersion": "0.1.0",
+    "flutterVersion": "3.44.8",
+    "dartVersion": "3.12.2",
+    "androidNativeVersion": "3.2.1",
+    "iosNativeVersion": "3.2.0"
+  },
+  "run": {
+    "startedAt": null,
+    "completedAt": null,
+    "operator": ""
+  },
+  "privacy": {
+    "credentialsInjectedAtRuntime": false,
+    "credentialsPersisted": false,
+    "sleepDataRetained": false
+  },
+  "platforms": {
+    "android": {
+      "devices": [
+        { "role": "minimum", "physical": false, "manufacturer": "", "model": "", "architecture": "arm64-v8a", "osVersion": "", "apiLevel": 24 },
+        { "role": "current", "physical": false, "manufacturer": "", "model": "", "architecture": "arm64-v8a", "osVersion": "", "apiLevel": 34 }
+      ],
+      "scenarios": {
+        "cold_start_without_permissions": { "status": "not_run", "completedAt": null, "evidence": [], "notes": "", "deviceRoles": [] },
+        "permission_denial_and_regrant": { "status": "not_run", "completedAt": null, "evidence": [], "notes": "", "deviceRoles": [] },
+        "notification_denial_api_33_plus": { "status": "not_run", "completedAt": null, "evidence": [], "notes": "", "deviceRoles": [] },
+        "microphone_fgs_api_34_plus": { "status": "not_run", "completedAt": null, "evidence": [], "notes": "", "deviceRoles": [] },
+        "battery_settings_return_and_recheck": { "status": "not_run", "completedAt": null, "evidence": [], "notes": "", "deviceRoles": [] },
+        "process_kill_and_restore": { "status": "not_run", "completedAt": null, "evidence": [], "notes": "", "deviceRoles": [] },
+        "start_upload_analysis_stop_report": { "status": "not_run", "completedAt": null, "evidence": [], "notes": "", "deviceRoles": [] },
+        "full_night_session": { "status": "not_run", "completedAt": null, "evidence": [], "notes": "", "deviceRoles": [] }
+      }
+    },
+    "ios": {
+      "devices": [
+        { "role": "minimum", "physical": false, "manufacturer": "Apple", "model": "", "architecture": "arm64", "osVersion": "", "osMajor": 15 },
+        { "role": "current", "physical": false, "manufacturer": "Apple", "model": "", "architecture": "arm64", "osVersion": "", "osMajor": 16 }
+      ],
+      "scenarios": {
+        "cold_start_without_permissions": { "status": "not_run", "completedAt": null, "evidence": [], "notes": "", "deviceRoles": [] },
+        "permission_denial_and_recovery": { "status": "not_run", "completedAt": null, "evidence": [], "notes": "", "deviceRoles": [] },
+        "background_audio": { "status": "not_run", "completedAt": null, "evidence": [], "notes": "", "deviceRoles": [] },
+        "interruption_and_foreground_resume": { "status": "not_run", "completedAt": null, "evidence": [], "notes": "", "deviceRoles": [] },
+        "later_upload_recovery": { "status": "not_run", "completedAt": null, "evidence": [], "notes": "", "deviceRoles": [] },
+        "analysis_ack_and_event": { "status": "not_run", "completedAt": null, "evidence": [], "notes": "", "deviceRoles": [] },
+        "stop_and_report": { "status": "not_run", "completedAt": null, "evidence": [], "notes": "", "deviceRoles": [] },
+        "full_night_session": { "status": "not_run", "completedAt": null, "evidence": [], "notes": "", "deviceRoles": [] }
+      }
+    }
+  }
+}

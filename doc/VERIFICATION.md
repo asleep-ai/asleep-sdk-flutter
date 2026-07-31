@@ -2,6 +2,10 @@
 
 Record updated: 2026-07-31
 
+Physical-device release qualification is defined in
+[`DEVICE_QUALIFICATION.md`](DEVICE_QUALIFICATION.md). The checked-in evidence
+template remains entirely `not_run`; it is not proof for this candidate.
+
 Toolchain:
 
 - Flutter 3.44.2 minimum and 3.44.8 current
@@ -98,7 +102,9 @@ The prior CocoaPods warnings came from external build inputs:
 
 No physical-device tracking, microphone, background, process-restoration, or
 real sleep-session test was performed. Those runtime checks require an issued
-API key, supported devices, and product QA authorization.
+API key, supported devices, product QA authorization, and approved evidence for
+every scenario in `qualification/evidence.template.json`. Missing evidence now
+blocks a tagged release before pub.dev publication.
 
 In the prior baseline, the rebuilt APK was reinstalled and its activity was
 activated successfully after the multi-engine ownership patch. That result

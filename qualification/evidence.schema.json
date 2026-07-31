@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://asleep.ai/schemas/flutter-device-qualification-v1.json",
+  "title": "Asleep Flutter SDK device qualification evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "candidate", "run", "privacy", "platforms"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commitSha",
+        "packageVersion",
+        "flutterVersion",
+        "dartVersion",
+        "androidNativeVersion",
+        "iosNativeVersion"
+      ],
+      "properties": {
+        "commitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "packageVersion": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$"
+        },
+        "flutterVersion": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$"
+        },
+        "dartVersion": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$"
+        },
+        "androidNativeVersion": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$"
+        },
+        "iosNativeVersion": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$"
+        }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startedAt", "completedAt", "operator"],
+      "properties": {
+        "startedAt": { "type": ["string", "null"], "format": "date-time" },
+        "completedAt": { "type": ["string", "null"], "format": "date-time" },
+        "operator": { "type": "string" }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "credentialsInjectedAtRuntime",
+        "credentialsPersisted",
+        "sleepDataRetained"
+      ],
+      "properties": {
+        "credentialsInjectedAtRuntime": { "type": "boolean" },
+        "credentialsPersisted": { "type": "boolean" },
+        "sleepDataRetained": { "type": "boolean" }
+      }
+    },
+    "platforms": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["android", "ios"],
+      "properties": {
+        "android": { "$ref": "#/$defs/androidPlatform" },
+        "ios": { "$ref": "#/$defs/iosPlatform" }
+      }
+    }
+  },
+  "$defs": {
+    "androidPlatform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["devices", "scenarios"],
+      "properties": {
+        "devices": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/androidDevice" }
+        },
+        "scenarios": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/scenario" }
+        }
+      }
+    },
+    "iosPlatform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["devices", "scenarios"],
+      "properties": {
+        "devices": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/iosDevice" }
+        },
+        "scenarios": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/scenario" }
+        }
+      }
+    },
+    "androidDevice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "physical",
+        "role",
+        "manufacturer",
+        "model",
+        "architecture",
+        "osVersion",
+        "apiLevel"
+      ],
+      "properties": {
+        "role": { "enum": ["minimum", "current"] },
+        "physical": { "type": "boolean" },
+        "manufacturer": { "type": "string" },
+        "model": { "type": "string" },
+        "architecture": { "const": "arm64-v8a" },
+        "osVersion": { "type": "string" },
+        "apiLevel": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "iosDevice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "physical",
+        "role",
+        "manufacturer",
+        "model",
+        "architecture",
+        "osVersion",
+        "osMajor"
+      ],
+      "properties": {
+        "role": { "enum": ["minimum", "current"] },
+        "physical": { "type": "boolean" },
+        "manufacturer": { "type": "string" },
+        "model": { "type": "string" },
+        "architecture": { "const": "arm64" },
+        "osVersion": { "type": "string" },
+        "osMajor": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "completedAt", "evidence", "notes", "deviceRoles"],
+      "properties": {
+        "status": { "enum": ["passed", "failed", "blocked", "not_run"] },
+        "completedAt": { "type": ["string", "null"], "format": "date-time" },
+        "evidence": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "format": "uri", "pattern": "^https://" }
+        },
+        "notes": { "type": "string" },
+        "deviceRoles": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["minimum", "current"] }
+        }
+      }
+    }
+  }
+}
