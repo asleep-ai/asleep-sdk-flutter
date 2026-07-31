@@ -15,6 +15,7 @@ on:
 permissions:
   actions: read
   contents: read
+  issues: read
 
 env:
   FLUTTER_VERSION: 3.44.8
@@ -59,16 +60,28 @@ jobs:
           REVIEWER_ALLOWLIST: ${{ vars.DEVICE_QUALIFICATION_REVIEWERS }}
         run: |
           set -euo pipefail
+          [[ "$APPROVAL_COMMENT_ID" =~ ^[0-9]+$ ]]
           digest="$(sha256sum "$RUNNER_TEMP/evidence.json" | awk '{print $1}')"
-          expected_body="$(printf 'ASLEEP_DEVICE_QUALIFICATION_APPROVAL_V1\\ncommit=%s\\nevidence_sha256=%s' "$GITHUB_SHA" "$digest")"
+          expected_body="$(printf 'ASLEEP_DEVICE_QUALIFICATION_APPROVAL_V1\ncommit=%s\nevidence_sha256=%s' "$GITHUB_SHA" "$digest")"
           comment="$(gh api "repos/$GITHUB_REPOSITORY/issues/comments/$APPROVAL_COMMENT_ID")"
-          reviewer="$(jq -r .user.login <<< "$comment")"
-          jq -e 'type == "array" and all(.[]; type == "string")' <<< "$REVIEWER_ALLOWLIST" > /dev/null
+          reviewer="$(jq -er .user.login <<< "$comment")"
+          jq -e '
+            type == "array" and
+            length > 0 and
+            all(.[];
+              type == "string" and
+              test("^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
+            ) and
+            ([.[] | ascii_downcase] | length == (unique | length))
+          ' <<< "$REVIEWER_ALLOWLIST" > /dev/null
           jq -e --arg reviewer "${reviewer,,}" 'map(ascii_downcase) | index($reviewer) != null' <<< "$REVIEWER_ALLOWLIST" > /dev/null
           test "${reviewer,,}" != "${GITHUB_ACTOR,,}"
           test "$(jq -r .body <<< "$comment")" = "$expected_body"
-          completed_at="$(jq -r .run.completedAt "$RUNNER_TEMP/evidence.json")"
-          test "$(jq -r .updated_at <<< "$comment")" \> "$completed_at"
+          comment_updated_at="$(jq -er .updated_at <<< "$comment")"
+          completed_at="$(jq -er .run.completedAt "$RUNNER_TEMP/evidence.json")"
+          comment_updated_epoch="$(date -u -d "$comment_updated_at" +%s)"
+          completed_epoch="$(date -u -d "$completed_at" +%s)"
+          (( comment_updated_epoch >= completed_epoch ))
           {
             echo "EVIDENCE_SHA256=$digest"
             echo "APPROVAL_REVIEWER=$reviewer"

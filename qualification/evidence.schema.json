@@ -129,7 +129,17 @@
         "architecture": { "const": "arm64-v8a" },
         "osVersion": { "type": "string" },
         "apiLevel": { "type": "integer", "minimum": 0 }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "role": { "const": "minimum" } } },
+          "then": { "properties": { "apiLevel": { "const": 24 } } }
+        },
+        {
+          "if": { "properties": { "role": { "const": "current" } } },
+          "then": { "properties": { "apiLevel": { "minimum": 36 } } }
+        }
+      ]
     },
     "iosDevice": {
       "type": "object",
@@ -151,7 +161,17 @@
         "architecture": { "const": "arm64" },
         "osVersion": { "type": "string" },
         "osMajor": { "type": "integer", "minimum": 0 }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "role": { "const": "minimum" } } },
+          "then": { "properties": { "osMajor": { "const": 15 } } }
+        },
+        {
+          "if": { "properties": { "role": { "const": "current" } } },
+          "then": { "properties": { "osMajor": { "minimum": 26 } } }
+        }
+      ]
     },
     "scenario": {
       "type": "object",

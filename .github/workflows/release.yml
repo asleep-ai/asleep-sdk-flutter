@@ -90,7 +90,6 @@ jobs:
         if: ${{ github.event_name == 'push' }}
         env:
           GH_TOKEN: ${{ github.token }}
-          REVIEWER_ALLOWLIST: ${{ vars.DEVICE_QUALIFICATION_REVIEWERS }}
         run: |
           set -euo pipefail
           git fetch --no-tags origin main
@@ -380,6 +379,7 @@ jobs:
     permissions:
       actions: read
       contents: read
+      issues: read
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -400,6 +400,7 @@ jobs:
         if: ${{ github.event_name == 'push' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          REVIEWER_ALLOWLIST: ${{ vars.DEVICE_QUALIFICATION_REVIEWERS }}
         run: |
           set -euo pipefail
           run_id="$(
@@ -426,19 +427,40 @@ jobs:
           test "$(jq -r .commitSha "$RUNNER_TEMP/device-qualification/attestation.json")" = "$GITHUB_SHA"
           test "$(jq -r .workflowRunId "$RUNNER_TEMP/device-qualification/attestation.json")" = "$run_id"
           run_actor="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq .actor.login)"
-          test "$(jq -r .operator "$RUNNER_TEMP/device-qualification/attestation.json")" = "$run_actor"
+          test -n "$run_actor"
+          attested_operator="$(jq -er .operator "$RUNNER_TEMP/device-qualification/attestation.json")"
+          evidence_operator="$(jq -er .run.operator "$RUNNER_TEMP/device-qualification/evidence.json")"
+          [[ "${attested_operator,,}" == "${run_actor,,}" ]]
+          [[ "${evidence_operator,,}" == "${run_actor,,}" ]]
           evidence_digest="$(sha256sum "$RUNNER_TEMP/device-qualification/evidence.json" | awk '{print $1}')"
           test "$(jq -r .evidenceSha256 "$RUNNER_TEMP/device-qualification/attestation.json")" = "$evidence_digest"
           comment_id="$(jq -r .approvalCommentId "$RUNNER_TEMP/device-qualification/attestation.json")"
+          [[ "$comment_id" =~ ^[0-9]+$ ]]
           comment="$(gh api "repos/$GITHUB_REPOSITORY/issues/comments/$comment_id")"
-          reviewer="$(jq -r .user.login <<< "$comment")"
+          reviewer="$(jq -er .user.login <<< "$comment")"
+          attested_reviewer="$(jq -er .reviewer "$RUNNER_TEMP/device-qualification/attestation.json")"
+          [[ "${reviewer,,}" == "${attested_reviewer,,}" ]]
           test "${reviewer,,}" != "${run_actor,,}"
-          jq -e 'type == "array" and all(.[]; type == "string")' <<< "$REVIEWER_ALLOWLIST" > /dev/null
+          jq -e '
+            type == "array" and
+            length > 0 and
+            all(.[];
+              type == "string" and
+              test("^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
+            ) and
+            ([.[] | ascii_downcase] | length == (unique | length))
+          ' <<< "$REVIEWER_ALLOWLIST" > /dev/null
           jq -e --arg reviewer "${reviewer,,}" 'map(ascii_downcase) | index($reviewer) != null' <<< "$REVIEWER_ALLOWLIST" > /dev/null
-          expected_body="$(printf 'ASLEEP_DEVICE_QUALIFICATION_APPROVAL_V1\\ncommit=%s\\nevidence_sha256=%s' "$GITHUB_SHA" "$evidence_digest")"
+          expected_body="$(printf 'ASLEEP_DEVICE_QUALIFICATION_APPROVAL_V1\ncommit=%s\nevidence_sha256=%s' "$GITHUB_SHA" "$evidence_digest")"
           test "$(jq -r .body <<< "$comment")" = "$expected_body"
-          test "$(jq -r .created_at <<< "$comment")" = "$(jq -r .approvalCreatedAt "$RUNNER_TEMP/device-qualification/attestation.json")"
-          test "$(jq -r .updated_at <<< "$comment")" = "$(jq -r .approvalUpdatedAt "$RUNNER_TEMP/device-qualification/attestation.json")"
+          comment_created_at="$(jq -er .created_at <<< "$comment")"
+          comment_updated_at="$(jq -er .updated_at <<< "$comment")"
+          test "$comment_created_at" = "$(jq -r .approvalCreatedAt "$RUNNER_TEMP/device-qualification/attestation.json")"
+          test "$comment_updated_at" = "$(jq -r .approvalUpdatedAt "$RUNNER_TEMP/device-qualification/attestation.json")"
+          evidence_completed_at="$(jq -er .run.completedAt "$RUNNER_TEMP/device-qualification/evidence.json")"
+          comment_updated_epoch="$(date -u -d "$comment_updated_at" +%s)"
+          evidence_completed_epoch="$(date -u -d "$evidence_completed_at" +%s)"
+          (( comment_updated_epoch >= evidence_completed_epoch ))
 
       - name: Resolve candidate versions
         if: ${{ github.event_name == 'push' }}

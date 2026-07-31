@@ -291,7 +291,7 @@ void _validatePlatform(
       errors.add('$base.devices must contain minimum and current roles.');
     }
     final versionField = platform == 'android' ? 'apiLevel' : 'osMajor';
-    final currentMinimum = platform == 'android' ? 34 : 16;
+    final currentMinimum = platform == 'android' ? 36 : 26;
     if ((deviceRoles['current'] ?? -1) < currentMinimum) {
       errors.add(
         '$base current $versionField must be at least $currentMinimum.',
@@ -365,7 +365,24 @@ void _validatePlatform(
     } else if (!allowIncomplete && roles.isEmpty) {
       errors.add('$scenarioPath.deviceRoles must not be empty.');
     } else {
-      usedDeviceRoles.addAll(roles.cast<String>());
+      final typedRoles = roles.cast<String>();
+      usedDeviceRoles.addAll(typedRoles);
+      final requiredApiLevel = switch (id) {
+        'notification_denial_api_33_plus' => 33,
+        'microphone_fgs_api_34_plus' => 34,
+        _ => null,
+      };
+      if (platform == 'android' &&
+          requiredApiLevel != null &&
+          typedRoles.isNotEmpty &&
+          !typedRoles.any(
+            (role) => (deviceRoles[role] ?? -1) >= requiredApiLevel,
+          )) {
+        errors.add(
+          '$scenarioPath.deviceRoles must include a device at API '
+          '$requiredApiLevel or newer.',
+        );
+      }
     }
     final status = scenario['status'];
     if (!{'passed', 'failed', 'blocked', 'not_run'}.contains(status)) {

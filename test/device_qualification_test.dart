@@ -91,9 +91,11 @@ void main() {
   test('unsupported OS capabilities block release', () {
     final evidence = _completeEvidence();
     final androidDevice = _device(evidence, 'android', 'current');
-    androidDevice['apiLevel'] = 33;
-    final iosDevice = _device(evidence, 'ios', 'minimum');
-    iosDevice['osMajor'] = 14;
+    androidDevice['apiLevel'] = 35;
+    final iosCurrentDevice = _device(evidence, 'ios', 'current');
+    iosCurrentDevice['osMajor'] = 25;
+    final iosMinimumDevice = _device(evidence, 'ios', 'minimum');
+    iosMinimumDevice['osMajor'] = 14;
 
     expect(
       validateDeviceQualification(
@@ -102,8 +104,40 @@ void main() {
         now: DateTime.utc(2026, 8),
       ),
       containsAll(<dynamic>[
-        'platforms.android current apiLevel must be at least 34.',
+        'platforms.android current apiLevel must be at least 36.',
+        'platforms.ios current osMajor must be at least 26.',
         'platforms.ios minimum osMajor must equal 15.',
+      ]),
+    );
+  });
+
+  test('API-specific scenarios require a capable Android device role', () {
+    final evidence = _completeEvidence();
+    for (final id in [
+      'notification_denial_api_33_plus',
+      'microphone_fgs_api_34_plus',
+    ]) {
+      (_scenarios(evidence, 'android')[id]!
+          as Map<String, Object?>)['deviceRoles'] = <Object?>[
+        'minimum',
+      ];
+    }
+
+    expect(
+      validateDeviceQualification(
+        evidence,
+        expectations: _expectations,
+        now: DateTime.utc(2026, 8),
+      ),
+      containsAll(<dynamic>[
+        contains(
+          'notification_denial_api_33_plus.deviceRoles must include '
+          'a device at API 33 or newer',
+        ),
+        contains(
+          'microphone_fgs_api_34_plus.deviceRoles must include '
+          'a device at API 34 or newer',
+        ),
       ]),
     );
   });
@@ -293,7 +327,7 @@ Map<String, Object?> _completeEvidence() {
     24,
     36,
   );
-  final ios = platform('Apple', 'iPhone', 'arm64', 'osMajor', 15, 18);
+  final ios = platform('Apple', 'iPhone', 'arm64', 'osMajor', 15, 26);
   final androidScenarios = android['scenarios']! as Map<String, Object?>;
   final iosScenarios = ios['scenarios']! as Map<String, Object?>;
   for (final id in androidQualificationScenarios) {

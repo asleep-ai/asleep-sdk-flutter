@@ -20,11 +20,12 @@ Evidence is valid for one exact Git commit and this complete version tuple:
 - the device roles on which each scenario was exercised.
 
 The Android device must run API 33 or later for the notification-denial case
-and API 34 or later for the microphone foreground-service case. Use a second
-device when a single physical device cannot cover both the minimum supported
-OS and the current production OS. The iOS matrix must include iOS 15 and the
-current production OS over the supported-device set before support is claimed
-for both.
+and API 34 or later for the microphone foreground-service case. The current
+production role must run Android 16 (API 36) or newer. Use a second device when
+a single physical device cannot cover both the minimum supported OS and the
+current production OS. The iOS matrix must include iOS 15 and an iOS 26 or
+newer current-production device over the supported-device set before support
+is claimed for both.
 
 ## Credential and data rules
 
@@ -117,8 +118,10 @@ commit=<40-character candidate SHA>
 evidence_sha256=<SHA-256 of evidence.json>
 ```
 
-Set `DEVICE_QUALIFICATION_REVIEWERS` to a JSON array of exact GitHub logins.
-Then dispatch the workflow from a branch or tag resolving to the candidate:
+Set `DEVICE_QUALIFICATION_REVIEWERS` to a non-empty JSON array of unique,
+non-empty GitHub logins. Login uniqueness and membership are
+case-insensitive. Then dispatch the workflow from a branch or tag resolving to
+the candidate:
 
 ```sh
 candidate_ref=main
@@ -131,13 +134,16 @@ gh workflow run device-qualification.yml \
 unset candidate_ref evidence_base64
 ```
 
-The workflow strictly parses the JSON reviewer allowlist, obtains the actual
-comment author from GitHub, requires a case-insensitively distinct
-`github.actor`, and binds the exact comment, commit, and evidence digest into
+The workflow accepts only a digits-only comment ID, strictly parses the JSON
+reviewer allowlist, obtains the actual comment author from GitHub, and requires
+a case-insensitively distinct `github.actor`. The approval comment's parsed
+timestamp must be at or after the evidence completion timestamp. The workflow
+binds the exact comment, reviewer, operator, commit, and evidence digest into
 an immutable run attestation. A release re-fetches the same-repository comment
-and fails if it was edited/deleted, the allowlist changed, or any digest/run
-provenance differs. This works for private repositories on the GitHub Team
-plan without environment reviewer support.
+and workflow run, rechecks the timestamps as parsed instants, and fails if the
+comment was edited/deleted, the allowlist changed, or any reviewer, operator,
+digest, or run provenance differs. This works for private repositories on the
+GitHub Team plan without environment reviewer support.
 
 Ordinary pull-request CI validates only the incomplete template structure and
 unit tests. It needs no device, QA API key, or release evidence.

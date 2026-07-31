@@ -22,7 +22,7 @@
     "android": {
       "devices": [
         { "role": "minimum", "physical": false, "manufacturer": "", "model": "", "architecture": "arm64-v8a", "osVersion": "", "apiLevel": 24 },
-        { "role": "current", "physical": false, "manufacturer": "", "model": "", "architecture": "arm64-v8a", "osVersion": "", "apiLevel": 34 }
+        { "role": "current", "physical": false, "manufacturer": "", "model": "", "architecture": "arm64-v8a", "osVersion": "", "apiLevel": 36 }
       ],
       "scenarios": {
         "cold_start_without_permissions": { "status": "not_run", "completedAt": null, "evidence": [], "notes": "", "deviceRoles": [] },
@@ -38,7 +38,7 @@
     "ios": {
       "devices": [
         { "role": "minimum", "physical": false, "manufacturer": "Apple", "model": "", "architecture": "arm64", "osVersion": "", "osMajor": 15 },
-        { "role": "current", "physical": false, "manufacturer": "Apple", "model": "", "architecture": "arm64", "osVersion": "", "osMajor": 16 }
+        { "role": "current", "physical": false, "manufacturer": "Apple", "model": "", "architecture": "arm64", "osVersion": "", "osMajor": 26 }
       ],
       "scenarios": {
         "cold_start_without_permissions": { "status": "not_run", "completedAt": null, "evidence": [], "notes": "", "deviceRoles": [] },
