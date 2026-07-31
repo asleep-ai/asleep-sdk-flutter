@@ -324,29 +324,7 @@ void main() {
   });
 
   test('timestamp spellings must use canonical uppercase-Z UTC', () {
-    final timestampPaths =
-        <String, void Function(Map<String, Object?>, String)>{
-          'run.startedAt': (evidence, value) {
-            (evidence['run']! as Map<String, Object?>)['startedAt'] = value;
-          },
-          'run.completedAt': (evidence, value) {
-            (evidence['run']! as Map<String, Object?>)['completedAt'] = value;
-          },
-          'platforms.android.scenarios.full_night_session.completedAt':
-              (evidence, value) {
-                (_scenarios(evidence, 'android')['full_night_session']!
-                        as Map<String, Object?>)['completedAt'] =
-                    value;
-              },
-          'platforms.ios.scenarios.full_night_session.completedAt':
-              (evidence, value) {
-                (_scenarios(evidence, 'ios')['full_night_session']!
-                        as Map<String, Object?>)['completedAt'] =
-                    value;
-              },
-        };
-
-    for (final timestampPath in timestampPaths.entries) {
+    for (final timestampPath in _timestampPaths.entries) {
       for (final invalidTimestamp in _invalidTimestampSpellings) {
         final evidence = _completeEvidence();
         timestampPath.value(evidence, invalidTimestamp);
@@ -356,6 +334,25 @@ void main() {
             evidence,
             expectations: _expectations,
             now: DateTime.utc(2026, 8),
+          ),
+          contains('${timestampPath.key} must be an ISO-8601 UTC timestamp.'),
+          reason: '${timestampPath.key} accepted $invalidTimestamp',
+        );
+      }
+    }
+  });
+
+  test('calendar overflow timestamps are rejected without normalization', () {
+    for (final timestampPath in _timestampPaths.entries) {
+      for (final invalidTimestamp in _invalidCalendarTimestamps) {
+        final evidence = _completeEvidence();
+        timestampPath.value(evidence, invalidTimestamp);
+
+        expect(
+          validateDeviceQualification(
+            evidence,
+            expectations: _expectations,
+            now: DateTime.utc(2027),
           ),
           contains('${timestampPath.key} must be an ISO-8601 UTC timestamp.'),
           reason: '${timestampPath.key} accepted $invalidTimestamp',
@@ -381,6 +378,34 @@ void main() {
         evidence,
         expectations: _expectations,
         now: DateTime.utc(2026, 8),
+      ),
+      isEmpty,
+    );
+  });
+
+  test('strict timestamps accept leap day and component boundaries', () {
+    final evidence = _completeEvidence();
+    final run = evidence['run']! as Map<String, Object?>;
+    run['startedAt'] = '2024-02-29T00:00:00Z';
+    run['completedAt'] = '2024-12-31T23:59:59.999999Z';
+    for (final platform in ['android', 'ios']) {
+      for (final scenario in _scenarios(evidence, platform).values) {
+        (scenario as Map<String, Object?>)['completedAt'] =
+            '2024-06-01T12:00:00Z';
+      }
+    }
+    (_scenarios(evidence, 'android')['full_night_session']!
+            as Map<String, Object?>)['completedAt'] =
+        '2024-04-30T23:59:59Z';
+    (_scenarios(evidence, 'ios')['full_night_session']!
+            as Map<String, Object?>)['completedAt'] =
+        '2024-02-29T00:00:00.1Z';
+
+    expect(
+      validateDeviceQualification(
+        evidence,
+        expectations: _expectations,
+        now: DateTime.utc(2025),
       ),
       isEmpty,
     );
@@ -455,6 +480,37 @@ const _invalidTimestampSpellings = <String>[
   '2026-07-31T01:00:00z',
   '2026-07-31 01:00:00Z',
 ];
+
+const _invalidCalendarTimestamps = <String>[
+  '2026-00-01T01:00:00Z',
+  '2026-13-01T01:00:00Z',
+  '2026-02-31T01:00:00Z',
+  '2025-02-29T01:00:00Z',
+  '2026-04-31T01:00:00Z',
+  '2026-07-31T24:00:00Z',
+  '2026-07-31T01:60:00Z',
+  '2026-07-31T01:00:60Z',
+];
+
+final _timestampPaths = <String, void Function(Map<String, Object?>, String)>{
+  'run.startedAt': (evidence, value) {
+    (evidence['run']! as Map<String, Object?>)['startedAt'] = value;
+  },
+  'run.completedAt': (evidence, value) {
+    (evidence['run']! as Map<String, Object?>)['completedAt'] = value;
+  },
+  'platforms.android.scenarios.full_night_session.completedAt':
+      (evidence, value) {
+        (_scenarios(evidence, 'android')['full_night_session']!
+                as Map<String, Object?>)['completedAt'] =
+            value;
+      },
+  'platforms.ios.scenarios.full_night_session.completedAt': (evidence, value) {
+    (_scenarios(evidence, 'ios')['full_night_session']!
+            as Map<String, Object?>)['completedAt'] =
+        value;
+  },
+};
 
 const _expectations = QualificationExpectations(
   commitSha: '49fa33ca0d184d7c1954ad79a3077a5e67c78aa9',

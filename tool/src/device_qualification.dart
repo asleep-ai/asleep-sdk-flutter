@@ -38,8 +38,8 @@ final _prohibitedEvidenceValue = RegExp(
 );
 
 final _canonicalUtcTimestamp = RegExp(
-  r'^[0-9]{4}-[0-9]{2}-[0-9]{2}T'
-  r'[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?Z$',
+  r'^([0-9]{4})-([0-9]{2})-([0-9]{2})T'
+  r'([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.[0-9]+)?Z$',
 );
 
 const _prohibitedEvidenceKeys = <String>{
@@ -550,14 +550,34 @@ void _validateTimestampValue(
   Map<String, DateTime> timestamps,
 ) {
   if (allowNull && value == null) return;
-  final timestamp = value is String && _canonicalUtcTimestamp.hasMatch(value)
-      ? DateTime.tryParse(value)
-      : null;
+  final timestamp = _parseCanonicalUtcTimestamp(value);
   if (timestamp == null) {
     errors.add('$path must be an ISO-8601 UTC timestamp.');
   } else {
     timestamps[path] = timestamp;
   }
+}
+
+DateTime? _parseCanonicalUtcTimestamp(Object? value) {
+  if (value is! String) return null;
+  final match = _canonicalUtcTimestamp.firstMatch(value);
+  if (match == null) return null;
+  final timestamp = DateTime.tryParse(value);
+  if (timestamp == null || !timestamp.isUtc) return null;
+  final parsedComponents = <int>[
+    timestamp.year,
+    timestamp.month,
+    timestamp.day,
+    timestamp.hour,
+    timestamp.minute,
+    timestamp.second,
+  ];
+  for (var index = 0; index < parsedComponents.length; index++) {
+    if (parsedComponents[index] != int.parse(match.group(index + 1)!)) {
+      return null;
+    }
+  }
+  return timestamp;
 }
 
 void _validateTimestampOrder(
