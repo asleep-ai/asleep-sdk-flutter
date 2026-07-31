@@ -26,6 +26,7 @@ void main() {
       'Start tracking',
       'Resume tracking',
       'Stop tracking',
+      'Recheck tracking state',
       'Request analysis',
       'Detailed report',
       'Report list',
@@ -314,6 +315,7 @@ void main() {
       hostPlatform: DiagnosticHostPlatform.android,
     );
     await controller.initializeOrRestore('runtime-secret');
+    platform.restoreCompleter = Completer<RestoreResult>();
     await tester.pumpWidget(AsleepExampleApp(controller: controller));
 
     await tester.tap(find.text('Start tracking'));
@@ -339,6 +341,28 @@ void main() {
     await tester.pump();
     expect(platform.stopCount, 1);
     platform.startCompleter!.completeError(StateError('start cancelled'));
+    await tester.pump();
+
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Start tracking'),
+          )
+          .onPressed,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.widgetWithText(OutlinedButton, 'Recheck tracking state'),
+          )
+          .onPressed,
+      isNull,
+    );
+
+    platform.restoreCompleter!.complete(
+      const RestoreResult(hasActiveSession: false),
+    );
     await tester.pumpAndSettle();
 
     expect(controller.operationMessage, 'Tracking stopped');
@@ -414,6 +438,7 @@ class _WidgetFakePlatform implements AsleepPlatform {
   List<AsleepSession> reportListResult = const <AsleepSession>[];
   Completer<void>? deleteCompleter;
   Completer<void>? startCompleter;
+  Completer<RestoreResult>? restoreCompleter;
   bool permissionsGranted = true;
   bool permissionRequestResult = true;
 
@@ -430,6 +455,7 @@ class _WidgetFakePlatform implements AsleepPlatform {
 
   @override
   Future<RestoreResult> checkAndRestoreTracking() async =>
+      await restoreCompleter?.future ??
       const RestoreResult(hasActiveSession: false);
 
   @override

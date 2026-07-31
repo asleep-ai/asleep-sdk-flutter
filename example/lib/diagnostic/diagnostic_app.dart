@@ -197,6 +197,12 @@ class _DiagnosticPageState extends State<DiagnosticPage>
                     child: const Text('Stop tracking'),
                   ),
                   OutlinedButton(
+                    onPressed: controller.canReconcileTracking
+                        ? () => unawaited(controller.reconcileTrackingState())
+                        : null,
+                    child: const Text('Recheck tracking state'),
+                  ),
+                  OutlinedButton(
                     onPressed:
                         snapshot.trackingStatus == TrackingStatus.tracking
                         ? () => unawaited(controller.requestAnalysis())

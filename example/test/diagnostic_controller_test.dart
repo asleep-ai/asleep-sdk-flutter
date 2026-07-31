@@ -153,6 +153,7 @@ void main() {
       final platform = _FakePlatform()..startCompleter = Completer<void>();
       final controller = _controller(platform);
       await controller.initializeOrRestore('runtime-secret');
+      platform.restoreCompleter = Completer<RestoreResult>();
 
       final start = controller.startTracking();
       await Future<void>.delayed(Duration.zero);
@@ -160,18 +161,199 @@ void main() {
       expect(controller.canStartTracking, isFalse);
       expect(controller.canStopTracking, isTrue);
 
-      await controller.stopTracking();
+      final stop = controller.stopTracking();
+      await Future<void>.delayed(Duration.zero);
       expect(platform.calls, contains('stop'));
       platform.startCompleter!.completeError(StateError('start cancelled'));
       await start;
 
+      expect(controller.canStartTracking, isFalse);
+      expect(controller.canReconcileTracking, isFalse);
+      platform.restoreCompleter!.complete(
+        const RestoreResult(hasActiveSession: false),
+      );
+      await stop;
+
       expect(controller.canStartTracking, isTrue);
       expect(controller.canStopTracking, isFalse);
+      expect(controller.trackingRestorationRequired, isFalse);
       expect(controller.permissionsGranted, isNull);
       expect(controller.operationMessage, 'Tracking stopped');
       expect(controller.operationError, isNull);
 
       await controller.close();
+    });
+
+    test('pending start reconciliation preserves a restored session', () async {
+      final platform = _FakePlatform()..startCompleter = Completer<void>();
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+      platform.restoreCompleter = Completer<RestoreResult>();
+
+      final start = controller.startTracking();
+      await Future<void>.delayed(Duration.zero);
+      final stop = controller.stopTracking();
+      await Future<void>.delayed(Duration.zero);
+      platform.startCompleter!.completeError(StateError('start cancelled'));
+      await start;
+      platform.restoreCompleter!.complete(
+        const RestoreResult(hasActiveSession: true),
+      );
+      await stop;
+
+      expect(controller.snapshot.trackingStatus, TrackingStatus.tracking);
+      expect(controller.canStartTracking, isFalse);
+      expect(controller.canStopTracking, isTrue);
+      expect(controller.operationMessage, 'Active tracking restored');
+      expect(controller.operationError, isNull);
+
+      await controller.close();
+    });
+
+    test('failed reconciliation keeps Start disabled until retry', () async {
+      final platform = _FakePlatform()..startCompleter = Completer<void>();
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+      platform.restoreCompleter = Completer<RestoreResult>();
+
+      final start = controller.startTracking();
+      await Future<void>.delayed(Duration.zero);
+      final stop = controller.stopTracking();
+      await Future<void>.delayed(Duration.zero);
+      platform.startCompleter!.completeError(StateError('start cancelled'));
+      await start;
+      platform.restoreCompleter!.completeError(
+        StateError('restore unavailable'),
+      );
+      await stop;
+
+      expect(controller.trackingRestorationRequired, isTrue);
+      expect(controller.canStartTracking, isFalse);
+      expect(controller.canReconcileTracking, isTrue);
+      expect(controller.operationMessage, 'Operation failed');
+      expect(controller.operationError, isNotNull);
+
+      platform.restoreCompleter = Completer<RestoreResult>();
+      final retry = controller.reconcileTrackingState();
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.canStartTracking, isFalse);
+      expect(controller.canReconcileTracking, isFalse);
+      platform.restoreCompleter!.complete(
+        const RestoreResult(hasActiveSession: false),
+      );
+      await retry;
+
+      expect(controller.trackingRestorationRequired, isFalse);
+      expect(controller.canStartTracking, isTrue);
+      expect(controller.operationMessage, 'Tracking stopped');
+      expect(controller.operationError, isNull);
+
+      await controller.close();
+    });
+
+    for (final hasActiveSession in <bool>[false, true]) {
+      test('tracked pending start waits for close before restoring '
+          '${hasActiveSession ? 'active' : 'idle'} state', () async {
+        final platform = _FakePlatform()..startCompleter = Completer<void>();
+        final controller = _controller(platform);
+        await controller.initializeOrRestore('runtime-secret');
+        platform.restoreCompleter = Completer<RestoreResult>();
+        final restoreCallsBefore = platform.calls
+            .where((call) => call == 'restore')
+            .length;
+
+        final start = controller.startTracking();
+        await Future<void>.delayed(Duration.zero);
+        platform.emit(const TrackingCreatedEvent(sessionId: 'session-created'));
+        final stop = controller.stopTracking();
+        await stop;
+
+        expect(
+          platform.calls.where((call) => call == 'restore').length,
+          restoreCallsBefore,
+        );
+        expect(controller.trackingRestorationRequired, isTrue);
+        expect(controller.canStartTracking, isFalse);
+        expect(controller.canReconcileTracking, isFalse);
+        expect(
+          controller.operationMessage,
+          'Tracking stop requested; waiting for close',
+        );
+
+        platform.startCompleter!.complete();
+        await start;
+        platform.emit(const TrackingClosedEvent(sessionId: 'session-created'));
+        await Future<void>.delayed(Duration.zero);
+        expect(
+          platform.calls.where((call) => call == 'restore').length,
+          restoreCallsBefore + 1,
+        );
+        platform.restoreCompleter!.complete(
+          RestoreResult(hasActiveSession: hasActiveSession),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        expect(controller.trackingRestorationRequired, isFalse);
+        expect(
+          controller.snapshot.trackingStatus,
+          hasActiveSession ? TrackingStatus.tracking : TrackingStatus.idle,
+        );
+        expect(controller.canStartTracking, !hasActiveSession);
+        expect(controller.canStopTracking, hasActiveSession);
+
+        await controller.close();
+      });
+    }
+
+    test('failed tracked Stop permits manual reconciliation', () async {
+      final platform = _FakePlatform()
+        ..startCompleter = Completer<void>()
+        ..stopError = StateError('stop unavailable');
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+
+      final start = controller.startTracking();
+      await Future<void>.delayed(Duration.zero);
+      platform.emit(const TrackingCreatedEvent(sessionId: 'session-created'));
+      await controller.stopTracking();
+
+      expect(controller.trackingRestorationRequired, isTrue);
+      expect(controller.canStartTracking, isFalse);
+      expect(controller.canReconcileTracking, isTrue);
+      expect(controller.operationMessage, 'Operation failed');
+
+      platform.startCompleter!.complete();
+      await start;
+      platform.restoreCompleter = Completer<RestoreResult>();
+      final retry = controller.reconcileTrackingState();
+      await Future<void>.delayed(Duration.zero);
+      platform.restoreCompleter!.complete(
+        const RestoreResult(hasActiveSession: true),
+      );
+      await retry;
+
+      expect(controller.trackingRestorationRequired, isFalse);
+      expect(controller.snapshot.trackingStatus, TrackingStatus.tracking);
+      expect(controller.operationMessage, 'Active tracking restored');
+
+      await controller.close();
+    });
+
+    test('close does not wait for a missing close event', () async {
+      final platform = _FakePlatform()..startCompleter = Completer<void>();
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+
+      final start = controller.startTracking();
+      await Future<void>.delayed(Duration.zero);
+      platform.emit(const TrackingCreatedEvent(sessionId: 'session-created'));
+      await controller.stopTracking();
+      platform.startCompleter!.complete();
+      await start;
+
+      expect(controller.trackingRestorationRequired, isTrue);
+      await controller.close();
+      expect(platform.disposeCount, 1);
     });
 
     test('keeps recording-dead sessions stoppable and not startable', () async {
@@ -987,6 +1169,7 @@ class _FakePlatform implements AsleepPlatform {
   Completer<void>? loggingEnableCompleter;
   Completer<void>? resumeCompleter;
   Completer<void>? startCompleter;
+  Completer<RestoreResult>? restoreCompleter;
   Completer<void>? deleteCompleter;
   Completer<AsleepReport>? reportCompleter;
   Completer<List<AsleepSession>>? reportListCompleter;
@@ -998,6 +1181,7 @@ class _FakePlatform implements AsleepPlatform {
   final Map<String, Completer<AsleepAverageReport>> averageReportCompleters =
       <String, Completer<AsleepAverageReport>>{};
   Object? disposeError;
+  Object? stopError;
   bool echoSetupKeyInError = false;
   String? setupApiKey;
   String? configuredApiKey;
@@ -1034,7 +1218,7 @@ class _FakePlatform implements AsleepPlatform {
   @override
   Future<RestoreResult> checkAndRestoreTracking() async {
     calls.add('restore');
-    return restoreResult;
+    return await restoreCompleter?.future ?? restoreResult;
   }
 
   @override
@@ -1077,6 +1261,9 @@ class _FakePlatform implements AsleepPlatform {
   @override
   Future<void> stopTracking() async {
     calls.add('stop');
+    if (stopError case final error?) {
+      throw error;
+    }
   }
 
   @override

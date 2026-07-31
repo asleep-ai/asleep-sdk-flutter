@@ -64,6 +64,9 @@ class DiagnosticController extends ChangeNotifier {
   bool _deletionInFlight = false;
   bool _startInFlight = false;
   int _startOutcomeGeneration = 0;
+  bool _trackingRestorationRequired = false;
+  bool _trackingReconciliationInFlight = false;
+  bool _trackingClosePending = false;
   bool _recordingDeadCleanupRequired;
   bool _recoveryAwaitingUpload = false;
   bool _resumeInFlight = false;
@@ -87,9 +90,17 @@ class DiagnosticController extends ChangeNotifier {
   bool get loggingEnabled => _loggingEnabled;
   bool get deletionInFlight => _deletionInFlight;
   bool get recoveryAwaitingUpload => _recoveryAwaitingUpload;
+  bool get trackingRestorationRequired => _trackingRestorationRequired;
+  bool get canReconcileTracking =>
+      _trackingRestorationRequired &&
+      !_trackingReconciliationInFlight &&
+      !_trackingClosePending;
   bool get canStopTracking =>
       _snapshot.isTracking || _startInFlight || _recordingDeadCleanupRequired;
-  bool get canStartTracking => !canStopTracking;
+  bool get canStartTracking =>
+      !canStopTracking &&
+      !_trackingRestorationRequired &&
+      !_trackingReconciliationInFlight;
 
   String? get operationErrorText => _safeErrorText(_operationError);
   String? get snapshotErrorText => _safeErrorText(_snapshot.error);
@@ -114,6 +125,8 @@ class DiagnosticController extends ChangeNotifier {
     }
     await _run('SDK ready', () async {
       final restore = await _client.checkAndRestoreTracking();
+      _trackingRestorationRequired = false;
+      _trackingClosePending = false;
       if (restore.hasActiveSession) {
         await _client.configure(AsleepConfiguration(apiKey: runtimeApiKey));
       } else {
@@ -201,8 +214,49 @@ class DiagnosticController extends ChangeNotifier {
   Future<void> resumeTracking() => _resumeForForeground();
 
   Future<void> stopTracking() async {
+    final mustReconcile = _startInFlight;
     _startOutcomeGeneration++;
-    await _run('Tracking stopped', _client.stopTracking);
+    if (mustReconcile) {
+      _trackingRestorationRequired = true;
+      _trackingReconciliationInFlight = true;
+      _notify();
+    }
+    try {
+      await _runWithOutcome(null, () async {
+        await _client.stopTracking();
+        if (mustReconcile) {
+          if (_client.state.trackingStatus == TrackingStatus.idle) {
+            await _restoreTrackingState();
+          } else {
+            _trackingClosePending = true;
+            _operationMessage = 'Tracking stop requested; waiting for close';
+          }
+        } else {
+          _operationMessage = 'Tracking stopped';
+        }
+      });
+    } finally {
+      if (mustReconcile) {
+        _trackingReconciliationInFlight = false;
+        _notify();
+      }
+    }
+  }
+
+  Future<void> reconcileTrackingState() async {
+    if (!_trackingRestorationRequired ||
+        _trackingReconciliationInFlight ||
+        _closed) {
+      return;
+    }
+    _trackingReconciliationInFlight = true;
+    _notify();
+    try {
+      await _runWithOutcome(null, _restoreTrackingState);
+    } finally {
+      _trackingReconciliationInFlight = false;
+      _notify();
+    }
   }
 
   Future<void> requestAnalysis() => _run('Analysis requested', () async {
@@ -211,6 +265,15 @@ class DiagnosticController extends ChangeNotifier {
       _analysisResult = result;
     }
   });
+
+  Future<void> _restoreTrackingState() async {
+    final restore = await _client.checkAndRestoreTracking();
+    _trackingRestorationRequired = false;
+    _trackingClosePending = false;
+    _operationMessage = restore.hasActiveSession
+        ? 'Active tracking restored'
+        : 'Tracking stopped';
+  }
 
   Future<void> loadReport(String sessionId) async {
     final normalized = sessionId.trim();
@@ -467,6 +530,10 @@ class DiagnosticController extends ChangeNotifier {
       _recordingDeadCleanupRequired = false;
       if (_recoveryAwaitingUpload) {
         _recoveryAwaitingUpload = false;
+      }
+      if (_trackingRestorationRequired) {
+        _trackingClosePending = false;
+        unawaited(reconcileTrackingState());
       }
     }
     if (event case AnalysisResultEvent(:final result)) {
