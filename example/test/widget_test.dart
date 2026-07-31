@@ -69,6 +69,99 @@ void main() {
 
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  testWidgets('recording-dead state enables Stop and disables Start', (
+    tester,
+  ) async {
+    _useTallSurface(tester);
+    final platform = _WidgetFakePlatform();
+    final controller = DiagnosticController(
+      client: AsleepClient(platform: platform),
+      hostPlatform: DiagnosticHostPlatform.android,
+    );
+    await controller.initializeOrRestore('runtime-secret');
+    await tester.pumpWidget(AsleepExampleApp(controller: controller));
+
+    platform.emit(
+      TrackingFailedEvent(
+        error: AsleepError(
+          code: 'AUDIO_INITIALIZATION_FAILED',
+          message: 'Recording stopped',
+          category: AsleepErrorCategory.recordingDead,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final start = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Start tracking'),
+    );
+    final stop = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Stop tracking'),
+    );
+    expect(start.onPressed, isNull);
+    expect(stop.onPressed, isNotNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('renders permission check and request outcomes distinctly', (
+    tester,
+  ) async {
+    _useTallSurface(tester);
+    final platform = _WidgetFakePlatform()
+      ..permissionsGranted = false
+      ..permissionRequestResult = true;
+    final controller = DiagnosticController(
+      client: AsleepClient(platform: platform),
+      hostPlatform: DiagnosticHostPlatform.android,
+    );
+    await tester.pumpWidget(AsleepExampleApp(controller: controller));
+
+    expect(find.text('unchecked'), findsAtLeastNWidgets(1));
+    await tester.tap(find.text('Check permissions'));
+    await tester.pumpAndSettle();
+    expect(find.text('denied'), findsOneWidget);
+
+    await tester.tap(find.text('Request permissions'));
+    await tester.pumpAndSettle();
+    expect(find.text('granted'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('renders snapshot errors without message or native details', (
+    tester,
+  ) async {
+    _useTallSurface(tester);
+    final platform = _WidgetFakePlatform();
+    final controller = DiagnosticController(
+      client: AsleepClient(platform: platform),
+      hostPlatform: DiagnosticHostPlatform.android,
+    );
+    await controller.initializeOrRestore('runtime-secret');
+    await tester.pumpWidget(AsleepExampleApp(controller: controller));
+
+    platform.emit(
+      TrackingFailedEvent(
+        error: AsleepError(
+          code: 'NETWORK_OFFLINE',
+          message: 'secret-native-message',
+          category: AsleepErrorCategory.transient,
+          platformDetails: const <String, Object?>{
+            'credential': 'runtime-secret',
+          },
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('NETWORK_OFFLINE (transient)'), findsOneWidget);
+    expect(find.textContaining('secret-native-message'), findsNothing);
+    expect(find.textContaining('runtime-secret'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 }
 
 void _useTallSurface(WidgetTester tester) {
@@ -81,9 +174,13 @@ class _WidgetFakePlatform implements AsleepPlatform {
   final StreamController<AsleepEvent> _events =
       StreamController<AsleepEvent>.broadcast(sync: true);
   int deleteCount = 0;
+  bool permissionsGranted = true;
+  bool permissionRequestResult = true;
 
   @override
   Stream<AsleepEvent> get events => _events.stream;
+
+  void emit(AsleepEvent event) => _events.add(event);
 
   @override
   Future<void> setup(AsleepSetupOptions options) async {}
@@ -103,10 +200,10 @@ class _WidgetFakePlatform implements AsleepPlatform {
   Future<bool> requestBatteryOptimizationExemption() async => true;
 
   @override
-  Future<bool> hasRequiredPermissions() async => true;
+  Future<bool> hasRequiredPermissions() async => permissionsGranted;
 
   @override
-  Future<bool> requestRequiredPermissions() async => true;
+  Future<bool> requestRequiredPermissions() async => permissionRequestResult;
 
   @override
   Future<void> startTracking(AsleepTrackingOptions options) async {}

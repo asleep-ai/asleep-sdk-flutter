@@ -149,9 +149,9 @@ class _DiagnosticPageState extends State<DiagnosticPage>
               _ButtonWrap(
                 children: <Widget>[
                   FilledButton.tonal(
-                    onPressed: snapshot.isTracking
-                        ? null
-                        : () => unawaited(controller.startTracking()),
+                    onPressed: controller.canStartTracking
+                        ? () => unawaited(controller.startTracking())
+                        : null,
                     child: const Text('Start tracking'),
                   ),
                   FilledButton.tonal(
@@ -164,7 +164,7 @@ class _DiagnosticPageState extends State<DiagnosticPage>
                     child: const Text('Resume tracking'),
                   ),
                   FilledButton.tonal(
-                    onPressed: snapshot.isTracking
+                    onPressed: controller.canStopTracking
                         ? () => unawaited(controller.stopTracking())
                         : null,
                     child: const Text('Stop tracking'),
@@ -253,6 +253,11 @@ class _DiagnosticPageState extends State<DiagnosticPage>
                 'Battery',
                 controller.batteryStatus?.exempted.toString() ?? 'unchecked',
               ),
+              _StatusRow('Permissions', switch (controller.permissionsGranted) {
+                true => 'granted',
+                false => 'denied',
+                null => 'unchecked',
+              }),
               _StatusRow('Last event', controller.lastEvent),
               _StatusRow(
                 'Detailed report',
@@ -276,6 +281,12 @@ class _DiagnosticPageState extends State<DiagnosticPage>
                 Text(
                   error,
                   key: const Key('operation-error'),
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              if (controller.snapshotErrorText case final error?)
+                Text(
+                  error,
+                  key: const Key('snapshot-error'),
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
             ],

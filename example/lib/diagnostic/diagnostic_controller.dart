@@ -40,6 +40,7 @@ class DiagnosticController extends ChangeNotifier {
   List<AsleepSession> _reportList = const <AsleepSession>[];
   AsleepAverageReport? _averageReport;
   AsleepAnalysisResult? _analysisResult;
+  bool? _permissionsGranted;
   AsleepError? _operationError;
   String? _operationMessage;
   String _lastEvent = 'No public events yet';
@@ -56,19 +57,23 @@ class DiagnosticController extends ChangeNotifier {
   List<AsleepSession> get reportList => _reportList;
   AsleepAverageReport? get averageReport => _averageReport;
   AsleepAnalysisResult? get analysisResult => _analysisResult;
+  bool? get permissionsGranted => _permissionsGranted;
   AsleepError? get operationError => _operationError;
   String? get operationMessage => _operationMessage;
   String get lastEvent => _lastEvent;
   bool get loggingEnabled => _loggingEnabled;
   bool get recoveryAwaitingUpload => _recoveryAwaitingUpload;
+  bool get canStopTracking =>
+      _snapshot.isTracking ||
+      (_snapshot.error?.category == AsleepErrorCategory.recordingDead &&
+          !_snapshot.didClose);
+  bool get canStartTracking => !canStopTracking;
 
-  String? get operationErrorText {
-    final error = _operationError;
-    if (error == null) {
-      return null;
-    }
-    return '${error.code} (${error.category.name})';
-  }
+  String? get operationErrorText => _safeErrorText(_operationError);
+  String? get snapshotErrorText => _safeErrorText(_snapshot.error);
+
+  String? _safeErrorText(AsleepError? error) =>
+      error == null ? null : '${error.code} (${error.category.name})';
 
   /// Restores first, then configures that session or initializes a new one.
   ///
@@ -101,10 +106,23 @@ class DiagnosticController extends ChangeNotifier {
     });
   }
 
-  Future<bool?> checkPermissions() => _runValue(_client.hasRequiredPermissions);
+  Future<bool?> checkPermissions() async {
+    bool? result;
+    await _run('Permission status checked', () async {
+      result = await _client.hasRequiredPermissions();
+      _permissionsGranted = result;
+    });
+    return result;
+  }
 
-  Future<bool?> requestPermissions() =>
-      _runValue(_client.requestRequiredPermissions);
+  Future<bool?> requestPermissions() async {
+    bool? result;
+    await _run('Permission request complete', () async {
+      result = await _client.requestRequiredPermissions();
+      _permissionsGranted = result;
+    });
+    return result;
+  }
 
   Future<void> recheckBatteryOptimization() async {
     await _run('Battery status refreshed', () async {

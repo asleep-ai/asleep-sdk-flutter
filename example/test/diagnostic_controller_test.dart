@@ -60,7 +60,9 @@ void main() {
       final controller = _controller(platform);
 
       expect(await controller.checkPermissions(), isFalse);
+      expect(controller.permissionsGranted, isFalse);
       expect(await controller.requestPermissions(), isTrue);
+      expect(controller.permissionsGranted, isTrue);
       await controller.initializeOrRestore('runtime-secret');
       expect(await controller.openBatterySettings(), isTrue);
       await controller.recheckBatteryOptimization();
@@ -74,6 +76,31 @@ void main() {
           'battery-check',
         ]),
       );
+
+      await controller.close();
+    });
+
+    test('keeps recording-dead sessions stoppable and not startable', () async {
+      final platform = _FakePlatform();
+      final controller = _controller(platform);
+      await controller.initializeOrRestore('runtime-secret');
+
+      platform.emit(
+        TrackingFailedEvent(
+          error: AsleepError(
+            code: 'AUDIO_INITIALIZATION_FAILED',
+            message: 'Recording stopped',
+            category: AsleepErrorCategory.recordingDead,
+          ),
+        ),
+      );
+
+      expect(controller.canStopTracking, isTrue);
+      expect(controller.canStartTracking, isFalse);
+
+      platform.emit(const TrackingClosedEvent(sessionId: 'session-1'));
+      expect(controller.canStopTracking, isFalse);
+      expect(controller.canStartTracking, isTrue);
 
       await controller.close();
     });
@@ -274,6 +301,33 @@ void main() {
 
       await controller.close();
     });
+
+    test(
+      'renders async snapshot failures without native message details',
+      () async {
+        final platform = _FakePlatform();
+        final controller = _controller(platform);
+        await controller.initializeOrRestore('runtime-secret');
+
+        platform.emit(
+          TrackingFailedEvent(
+            error: AsleepError(
+              code: 'NETWORK_OFFLINE',
+              message: 'secret-native-message',
+              category: AsleepErrorCategory.transient,
+            ),
+          ),
+        );
+
+        expect(controller.snapshotErrorText, 'NETWORK_OFFLINE (transient)');
+        expect(
+          controller.snapshotErrorText,
+          isNot(contains('secret-native-message')),
+        );
+
+        await controller.close();
+      },
+    );
 
     test(
       'disables logging, cancels subscriptions, and disposes once',
